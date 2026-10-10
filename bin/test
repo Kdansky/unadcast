@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The test suite, in the same image the worker runs: bin/test [pytest args]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec docker compose run --rm --build -T test pytest -q -p no:cacheprovider "$@"

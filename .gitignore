@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+# data/public is kept, so Docker finds it rather than creating it as root.
+data/*
+!data/public/
+data/public/*
+!data/public/.gitkeep
+config.toml
+todo.md
+.env
+.env.*
+!.env.example

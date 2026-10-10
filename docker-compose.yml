@@ -1,0 +1,102 @@
+# Every part of unadcast, on one machine or several; bin/install sets each machine's roles (COMPOSE_PROFILES in .env):
+#   process  the watcher: every 30 s it asks the admin page whether a pass is wanted (bin/on-demand), and only then starts
+#            ollama and a one-off `cli` pass on the GPU, stopping ollama afterwards. Tiny between passes.
+#   serve    nginx with the feeds and audio, and the admin page. Small; best on a machine that is always on.
+# Docker brings the services back after reboots. Published files go to data/public, or onto an SMB share with
+# compose.nas.yml.
+name: unadcast
+
+x-unadcast: &unadcast
+  image: unadcast
+  build: {context: ., target: app}
+  user: "${UID:-1000}:${GID:-1000}"
+  # That uid has no home in the image; Hugging Face downloads need one.
+  environment: [HOME=/tmp, HF_HOME=/work/data/models/huggingface, "UNADCAST_SERVER=${UNADCAST_SERVER:-}"]
+  volumes:
+    - ./config.toml:/work/config.toml:ro
+    - ./data:/work/data
+    - ./data/public:/work/data/public
+    - ./labels:/work/labels:ro
+  # Whisper runs on the GPU; the ollama service shares it, one model at a time.
+  gpus: all
+
+services:
+  watcher:
+    image: docker:27.5.1-cli
+    user: "${UID:-1000}:${GID:-1000}"
+    # The docker socket's group on this machine (stat -c %g /var/run/docker.sock), so the watcher may start containers.
+    group_add: ["${DOCKER_GID:-0}"]
+    # Docker resolves bind mounts on the host, so the repo is mounted at its real path and compose runs from there.
+    # HOME, UID and GID are the host's, for the paths and users compose fills into the other services.
+    working_dir: ${PWD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}:${PWD}
+      - /etc/hostname:/etc/host-name:ro
+    environment:
+      - HOME=${HOME}
+      - UID=${UID:-1000}
+      - GID=${GID:-1000}
+      - DOCKER_CONFIG=/tmp/docker
+      # Hours between passes nobody asked for; 0 for only on request. Set it in .env.
+      - UNADCAST_EVERY=${UNADCAST_EVERY:-12}
+      - UNADCAST_GPU_BUSY=${UNADCAST_GPU_BUSY:-50}
+      - UNADCAST_SERVER=${UNADCAST_SERVER:-}
+    entrypoint: ["sh", "-c", "UNADCAST_HOST=$$(cat /etc/host-name) exec bin/watch"]
+    restart: unless-stopped
+    profiles: [process]
+
+  # A pass every 30 minutes, for good: docker compose --profile always up -d
+  worker:
+    <<: *unadcast
+    command: ["unadcast", "loop"]
+    restart: unless-stopped
+    profiles: [always]
+
+  # Feeds and audio for podcast apps, read-only, and the admin page under /admin/.
+  web:
+    image: nginx:1.27.5-alpine
+    ports: ["${UNADCAST_PORT:-8765}:80"]
+    volumes:
+      - ./data/public:/srv:ro
+      - ./serve/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    depends_on: [admin]
+    profiles: [serve]
+
+  # Which shows to process, "Process now", Stop, Pause, and what the last pass did. Its state is the `admin` volume.
+  admin:
+    image: unadcast-admin
+    build: {context: ., dockerfile: serve/admin.Dockerfile}
+    volumes:
+      - admin:/data
+      - ./data/public:/srv:ro
+    restart: unless-stopped
+    profiles: [serve]
+
+  # Only the containers talk to it; the host's own ollama service, if you start it, keeps port 11434. Started and stopped
+  # around each pass by bin/on-demand, or kept up by the `always` profile.
+  ollama:
+    image: ollama/ollama:0.30.7
+    user: "${UID:-1000}:${GID:-1000}"
+    environment: [HOME=/tmp, OLLAMA_MODELS=/models, OLLAMA_KEEP_ALIVE=2m]
+    volumes: ["${HOME}/.ollama/models:/models"]
+    gpus: all
+    profiles: [llm, always]
+
+  # One-off commands: bin/unadcast <args>
+  cli:
+    <<: *unadcast
+    profiles: [cli]
+
+  test:
+    image: unadcast-dev
+    build: {context: ., target: dev}
+    user: "${UID:-1000}:${GID:-1000}"
+    working_dir: /app
+    environment: [HOME=/tmp]
+    command: ["pytest", "-q", "-p", "no:cacheprovider"]
+    profiles: [test]
+
+volumes:
+  admin:

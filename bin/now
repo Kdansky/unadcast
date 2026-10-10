@@ -1,0 +1,38 @@
+#!/bin/sh
+# What this machine is doing for unadcast right now: running passes, the step each is on, then the live output of the
+# one that is working (Ctrl-C stops watching, not the pass). Works whoever started the pass.
+cd "$(dirname "$0")/.."
+
+# First what holds the GPU: the containers, and the memory their processes use (nvidia-smi sees them by host pid).
+on=$(docker ps --filter label=com.docker.compose.project=unadcast --format '{{.Label "com.docker.compose.service"}}' \
+    | grep -xE 'ollama|cli|worker' | sort | uniq -c | awk '{ print $2 ($1 > 1 ? " x" $1 : "") }' | paste -sd, - | sed 's/,/, /g')
+if [ -z "$on" ]; then
+    echo "GPU: free, nothing of unadcast is up."
+else
+    mib=0
+    for row in $(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2> /dev/null | tr -d ' '); do
+        grep -q docker "/proc/${row%,*}/cgroup" 2> /dev/null && mib=$((mib + ${row#*,}))
+    done
+    echo "GPU: in use by $on, $mib MiB. bin/stop frees it."
+fi
+
+ids=$(docker ps --filter name=unadcast-cli-run --format '{{.ID}}')
+if [ -z "$ids" ]; then
+    echo "No pass running."
+    docker ps --filter name=unadcast-watcher --format 'Watcher: {{.Status}}' | grep . || echo "Watcher: not running (docker compose up -d)"
+    exit 0
+fi
+working=
+for id in $ids; do
+    since=$(docker ps --filter id="$id" --format '{{.RunningFor}}')
+    step=$(docker logs --tail 20 "$id" 2>&1 | grep -v telemetry | tail -1)
+    if [ -n "$step" ]; then
+        echo "Pass started $since, now: $step"
+        working=$id
+    else
+        echo "Pass started $since, waiting for the one before it to finish"
+    fi
+done
+[ -n "$working" ] || exit 0
+echo "--- following its output; Ctrl-C stops watching, not the pass ---"
+docker logs -f --tail 5 "$working" 2>&1 | grep --line-buffered -v telemetry

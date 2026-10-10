@@ -1,0 +1,20 @@
+# Published files on an SMB share (a NAS) instead of data/public; bin/install adds this file when NAS_ADDR is set.
+# Processing writes there, serving reads; serving can use a read-only user (NAS_SERVE_USER).
+services:
+  worker:
+    volumes: ["nas:/work/data/public"]
+  cli:
+    volumes: ["nas:/work/data/public"]
+  web:
+    volumes: ["nas:/srv:ro"]
+  admin:
+    volumes: ["nas:/srv:ro"]
+
+volumes:
+  nas:
+    driver: local
+    driver_opts:
+      type: cifs
+      # The kernel's CIFS client wants an address, not a name.
+      device: "//${NAS_IP}/${NAS_SHARE}"
+      o: "addr=${NAS_IP},username=${NAS_USER},password=${NAS_PASSWORD},vers=${NAS_SMB:-3.0},uid=${UID:-1000},gid=${GID:-1000},file_mode=0644,dir_mode=0755"

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Install or update unadcast as .env describes: processing on this machine, serving here or on another machine over ssh.
+# Safe to rerun, and the way to apply any change to .env. Checks everything it can before it changes anything.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+started=$(date +%s)
+MARK="# --- Written by bin/install from the lines above; edit those and rerun it. ---"
+
+say() { printf '\n== %s\n' "$*"; }
+die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
+
+[ -f .env ] || die "no .env here. Copy .env.example to .env, fill it in, and run bin/install again."
+
+# .env up to the generated block, KEY=VALUE per line, read literally: values may hold any character but a newline.
+declare -A env
+while IFS= read -r line; do
+    [ "$line" = "$MARK" ] && break
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]] || die ".env: can't read this line: $line"
+    k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
+    [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]] && v=${BASH_REMATCH[1]}
+    env[$k]=$v
+done < .env
+get() { echo "${env[$1]:-${2:-}}"; }
+
+process=$(get PROCESS yes)
+serve_host=$(get SERVE_HOST "")
+server=$(get UNADCAST_SERVER "")
+port=$(get UNADCAST_PORT 8765)
+nas=$(get NAS_ADDR "")
+every=$(get UNADCAST_EVERY 12)
+busy=$(get UNADCAST_GPU_BUSY 50)
+
+# --- The settings themselves ---
+[[ $process =~ ^(yes|no)$ ]] || die "PROCESS is \"$process\"; it is yes or no."
+[[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) || die "UNADCAST_PORT is \"$port\"; it is a port number, like 8765."
+[ -z "$server" ] || [[ $server =~ ^https?://[^/[:space:]]+/?$ ]] \
+    || die "UNADCAST_SERVER is \"$server\"; it is an address like http://192.168.1.20:$port, without a path."
+server=${server%/}
+[[ $every =~ ^[0-9]+([.][0-9]+)?$ ]] || die "UNADCAST_EVERY is \"$every\"; it is a number of hours, 0 for never."
+[[ $busy =~ ^[0-9]+$ ]] && ((busy >= 1 && busy <= 100)) || die "UNADCAST_GPU_BUSY is \"$busy\"; it is a percentage from 1 to 100."
+[ "$process" = yes ] || [ -z "$serve_host" ] \
+    || die "PROCESS=no and SERVE_HOST is set: nothing would run on this machine. Run bin/install on the machine that does either."
+if [ -z "$nas" ]; then
+    for k in NAS_SHARE NAS_USER NAS_PASSWORD NAS_SERVE_USER; do
+        [ -z "$(get $k "")" ] || die "$k is set but NAS_ADDR is empty. Set NAS_ADDR, or empty the NAS_ lines to keep files on this machine."
+    done
+    [ -z "$serve_host" ] || die "serving on $serve_host needs the files there too: set the NAS_ lines to a share both machines reach."
+    [ "$process" = yes ] || die "PROCESS=no needs the NAS share that processing publishes to: set the NAS_ lines."
+else
+    for k in NAS_SHARE NAS_USER NAS_PASSWORD; do
+        [ -n "$(get $k "")" ] || die "NAS_ADDR is set, so $k is needed too."
+    done
+    [ -z "$(get NAS_SERVE_USER "")" ] || [ -n "$(get NAS_SERVE_PASSWORD "")" ] || die "NAS_SERVE_USER is set, so NAS_SERVE_PASSWORD is needed too."
+    for k in NAS_USER NAS_PASSWORD NAS_SERVE_USER NAS_SERVE_PASSWORD; do
+        [[ $(get $k "") != *,* ]] || die "$k contains a comma, which SMB mount options can't carry. Choose another one on the NAS."
+    done
+    [[ $(get NAS_SMB 3.0) =~ ^(1\.0|2\.0|2\.1|3|3\.0|3\.02|3\.1\.1)$ ]] || die "NAS_SMB is \"$(get NAS_SMB)\"; it is an SMB version like 3.0 or 2.0."
+    # The kernel's CIFS client wants an address, not a name.
+    nas_ip=$nas
+    if ! [[ $nas =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        nas_ip=$(getent ahostsv4 "$nas" | awk 'NR == 1 { print $1 }' || true)
+        [ -n "$nas_ip" ] || die "NAS_ADDR \"$nas\" doesn't resolve to an address. Use the NAS's IP address."
+    fi
+fi
+
+# --- This machine ---
+say "Checking this machine"
+command -v docker > /dev/null || die "Docker is not installed: https://docs.docker.com/engine/install/"
+docker info > /dev/null 2>&1 || die "can't use Docker as $(id -un). Is it running? Is $(id -un) in the docker group? (sudo usermod -aG docker $(id -un), then log in again)"
+docker compose version > /dev/null 2>&1 || die "Docker Compose v2 is missing (the docker-compose-plugin package)."
+command -v curl > /dev/null || die "curl is not installed; it checks the admin page at the end."
+if [ "$process" = yes ]; then
+    command -v nvidia-smi > /dev/null && nvidia-smi > /dev/null 2>&1 \
+        || die "no working NVIDIA driver (nvidia-smi). Processing needs an NVIDIA GPU; for a serving-only machine set PROCESS=no."
+    [ ! -d config.toml ] || die "config.toml is a directory (Docker makes one when the file is missing). Remove it: rmdir config.toml"
+    [ -z "$(docker ps -q --filter name=unadcast-cli-run)" ] || die "a pass is running. Wait for it, or stop it with bin/stop, then rerun."
+fi
+if [ -n "$nas" ]; then
+    timeout 5 bash -c "exec 3<> /dev/tcp/$nas_ip/445" 2> /dev/null \
+        || die "can't reach the NAS at $nas_ip on port 445 (SMB). Is it on, and SMB enabled?"
+fi
+if [ -n "$serve_host" ]; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$serve_host" true 2> /dev/null \
+        || die "can't log in to $serve_host over ssh without a prompt. Set up key login (ssh-copy-id $serve_host), or unlock your ssh agent."
+fi
+
+# How phones and the watcher reach the admin page: the serving machine's first LAN address, unless .env says.
+if [ -z "$server" ]; then
+    if [ -n "$serve_host" ]; then
+        ip=$(ssh "$serve_host" "hostname -I 2> /dev/null" | awk '{ print $1 }' || true)
+    else
+        ip=$(hostname -I 2> /dev/null | awk '{ print $1 }' || true)
+    fi
+    [ -n "$ip" ] || die "couldn't work out the serving machine's address. Set UNADCAST_SERVER in .env."
+    server="http://$ip:$port"
+    echo "UNADCAST_SERVER is empty; using $server"
+fi
+
+profiles=()
+[ "$process" = yes ] && profiles+=(process)
+[ -z "$serve_host" ] && profiles+=(serve)
+echo "Processing: $([ "$process" = yes ] && echo "this machine" || echo "elsewhere")"
+echo "Serving: ${serve_host:-this machine}, at $server"
+if [ -n "$nas" ]; then echo "Files: //$nas_ip/$(get NAS_SHARE)"; else echo "Files: $(pwd)/data/public"; fi
+
+# --- The generated block: what compose needs that follows from the above ---
+{
+    sed "/^$(printf '%s' "$MARK" | sed 's/[][\.*^$/]/\\&/g')\$/,\$d" .env
+    echo "$MARK"
+    echo "COMPOSE_PROFILES=$(IFS=,; echo "${profiles[*]}")"
+    [ -n "$nas" ] && echo "COMPOSE_FILE=docker-compose.yml:compose.nas.yml" && echo "NAS_IP=$nas_ip"
+    echo "UNADCAST_SERVER=$server"
+    echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
+    echo "UID=$(id -u)"
+    echo "GID=$(id -g)"
+} > .env.new
+chmod 600 .env.new
+mv .env.new .env
+compose() { docker compose "$@"; }
+compose config -q || die "docker compose doesn't accept the configuration above."
+
+# Out of the way while things change. A NAS volume keeps the options it was made with: made anew, it has the current ones.
+[ "$process" = no ] || compose stop watcher > /dev/null 2>&1 || true
+[ -n "$serve_host" ] || compose --profile serve rm -sf web admin > /dev/null 2>&1 || true
+[ -z "$nas" ] || docker volume rm unadcast_nas > /dev/null 2>&1 || true
+
+if [ "$process" = yes ]; then
+    say "Processing"
+    mkdir -p data/public "$HOME/.ollama/models"
+    [ -f config.toml ] || { cp config.example.toml config.toml && echo "Made config.toml from config.example.toml"; }
+    echo "Building the processing image (several GB the first time)..."
+    compose build cli
+    out=$(compose run --rm -T --no-deps cli python -c 'from unadcast import config; c = config.load()["llm"]; print(c["backend"], c["model"])' 2>&1) \
+        || die "the processing container doesn't start. If the GPU is the problem, install the NVIDIA Container Toolkit:
+https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+$out"
+    read -r backend model <<< "$(tail -1 <<< "$out")"
+    out=$(compose run --rm -T --no-deps --entrypoint sh cli -c 'f=/work/data/public/.install-check; touch $f && rm $f' 2>&1) \
+        || die "can't write the published files. $([ -n "$nas" ] && echo "Check NAS_SHARE, NAS_USER, NAS_PASSWORD and NAS_SMB, and that the user may write to the share.")
+$out"
+    echo "Published files are writable."
+    if [ "$backend" = ollama ]; then
+        compose --profile llm up -d ollama > /dev/null
+        for _ in $(seq 30); do compose exec -T ollama ollama list > /dev/null 2>&1 && break; sleep 1; done
+        if compose exec -T ollama ollama list | awk '{ print $1 }' | grep -qxF "$model"; then
+            echo "Language model $model is there."
+        else
+            echo "Downloading the language model $model..."
+            compose exec -T ollama ollama pull "$model" || { compose --profile llm stop ollama; die "couldn't download $model; is its name in config.toml right?"; }
+        fi
+        compose --profile llm stop ollama > /dev/null
+    fi
+fi
+
+# Everything serving needs, run in the serving machine's folder, here or over ssh.
+serve_script='set -e
+docker info > /dev/null 2>&1 || { echo "error: can'\''t use Docker on $(hostname) as $(id -un): is it installed and running, and the user in the docker group?"; exit 1; }
+docker compose version > /dev/null 2>&1 || { echo "error: Docker Compose v2 is missing on $(hostname)"; exit 1; }
+docker compose --profile serve rm -sf web admin > /dev/null 2>&1 || true
+if command -v ss > /dev/null && ss -ltnH "sport = :$1" | grep -q .; then
+    echo "error: port $1 on $(hostname) is in use by another program; set UNADCAST_PORT in .env"; exit 1
+fi
+[ "$2" = renew ] && { docker volume rm unadcast_nas > /dev/null 2>&1 || true; }
+mkdir -p data/public
+docker compose --profile serve up -d --build web admin
+# nginx looks the admin container up once; a rebuilt one may have a new address.
+docker compose restart web > /dev/null'
+
+if [ -z "$serve_host" ]; then
+    say "Serving"
+    bash -c "$serve_script" serve "$port" keep || die "serving didn't start; see above."
+else
+    say "Serving, on $serve_host"
+    tar c docker-compose.yml compose.nas.yml .dockerignore serve unadcast/admin.py \
+        | ssh "$serve_host" "mkdir -p unadcast && tar xC unadcast" || die "couldn't copy the serving files to $serve_host:unadcast"
+    user=$(get NAS_SERVE_USER "") pass=$(get NAS_SERVE_PASSWORD "")
+    [ -n "$user" ] || { user=$(get NAS_USER); pass=$(get NAS_PASSWORD); }
+    printf '%s\n' "# Written by bin/install on $(hostname). Change .env there and rerun it rather than editing this." \
+        "COMPOSE_PROFILES=serve" "COMPOSE_FILE=docker-compose.yml:compose.nas.yml" "UNADCAST_PORT=$port" \
+        "NAS_IP=$nas_ip" "NAS_SHARE=$(get NAS_SHARE)" "NAS_USER=$user" "NAS_PASSWORD=$pass" "NAS_SMB=$(get NAS_SMB 3.0)" \
+        | ssh "$serve_host" "umask 077 && cat > unadcast/.env" || die "couldn't write unadcast/.env on $serve_host"
+    ssh "$serve_host" "cd unadcast && bash -s -- $port renew" <<< "$serve_script" || die "serving didn't start on $serve_host; see above."
+fi
+
+for _ in $(seq 20); do curl -fsS -m 5 -o /dev/null "$server/admin/api/run" 2> /dev/null && break; sleep 1; done
+curl -fsS -m 5 -o /dev/null "$server/admin/api/run" 2> /dev/null \
+    || die "serving runs, but $server/admin/ doesn't answer from here. Is UNADCAST_SERVER the serving machine's address, and port $port open in its firewall?"
+echo "The admin page answers at $server/admin/"
+
+if [ "$process" = yes ]; then
+    say "Starting the watcher"
+    compose up -d watcher
+    seen=0
+    for _ in $(seq 60); do
+        seen=$(curl -fsS -m 5 "$server/admin/api/pc" 2> /dev/null | sed -nE 's/.*"seen": *([0-9]+).*/\1/p')
+        [ "${seen:-0}" -ge "$started" ] && break
+        sleep 1
+    done
+    [ "${seen:-0}" -ge "$started" ] || die "the watcher hasn't checked in at $server within a minute. Its log: docker compose logs watcher"
+    echo "The watcher checked in."
+fi
+
+say "Done"
+echo "Open $server/admin/ and add your shows. Each one's \"Copy address\" is the feed to subscribe to in your podcast app."
+echo "Never make port $port reachable from the internet: the admin page has no login."

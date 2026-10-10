@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# The unadcast CLI, run inside its container: bin/unadcast status, bin/unadcast run, bin/unadcast report <episode> ...
+set -euo pipefail
+cd "$(dirname "$0")/.."
+tty=(); [ -t 0 ] && [ -t 1 ] || tty=(-T)
+exec docker compose run --rm "${tty[@]}" cli unadcast "$@"

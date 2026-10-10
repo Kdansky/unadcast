@@ -1,0 +1,12 @@
+#!/bin/sh
+# Free the GPU: stop unadcast's passes on this machine now, and ollama and the resident worker with them. Interrupted steps rerun on the next pass: a step's
+# stamp is removed when it starts, so nothing half-done is ever taken for finished.
+docker=${DOCKER:-docker}
+cd "$(dirname "$0")/.."
+ids=$($docker ps --filter name=unadcast-cli-run -q)
+if [ -n "$ids" ]; then
+    $docker stop $ids > /dev/null && echo "stopped $(echo $ids | wc -w) pass(es)"
+else
+    echo "no pass running"
+fi
+$docker compose --profile llm --profile always stop ollama worker 2> /dev/null || true

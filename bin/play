@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Listen to one detected span on the host, with context either side: bin/play <episode> <span number> [context seconds]
+# Span numbers are the #n in `bin/unadcast report <episode>`.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ep=$1 n=$2 pad=${3:-5}
+IFS=$'\t' read -r _ start end action path < <(docker compose run --rm -T cli unadcast spans "$ep" | awk -F'\t' -v n="$n" '$1 == n')
+from=$(awk -v s="$start" -v p="$pad" 'BEGIN { print (s > p ? s - p : 0) }')
+len=$(awk -v s="$start" -v e="$end" -v f="$from" -v p="$pad" 'BEGIN { print e - f + p }')
+echo "#$n $action ${start}s - ${end}s, playing from ${from}s (q to quit, arrows seek)"
+exec ffplay -hide_banner -loglevel error -autoexit -nodisp -ss "$from" -t "$len" "data/$path"

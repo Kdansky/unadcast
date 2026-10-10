@@ -1,0 +1,107 @@
+#!/bin/sh
+# One check, run every 30 s by the watcher container (bin/watch): if "Process now" was pressed on the admin page
+# since the last check, or the last pass is older than UNADCAST_EVERY hours (default 12, 0 = never), start ollama, run
+# one pass, stop ollama. During the pass, every UNADCAST_POLL seconds (default 10), "Stop" on the admin page stops it;
+# between passes, it stops whatever of unadcast is still on the GPU. A wanted pass waits while the admin page's "Pause"
+# lasts, and for an hour when something else (a game) uses UNADCAST_GPU_BUSY percent (default 50) of the GPU's memory.
+# Also tells the admin page (UNADCAST_SERVER) this machine is there, and which of unadcast's containers hold the GPU. POSIX sh and busybox
+# wget: the watcher image (docker:cli, Alpine) has no bash or curl.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+root=${UNADCAST_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+docker=${DOCKER:-docker}
+every=${UNADCAST_EVERY:-12}
+poll=${UNADCAST_POLL:-10}
+busy=${UNADCAST_GPU_BUSY:-50}
+host=${UNADCAST_HOST:-$(hostname)}
+state=$root/data/watcher
+mkdir -p "$state"
+cd "$root"
+
+# The admin page's API: from .env, or from feeds_url in config.toml.
+api=${UNADCAST_SERVER:+${UNADCAST_SERVER%/}/admin/api}
+[ -n "$api" ] || api=$(sed -nE 's|^feeds_url *= *"(.*)/feeds"|\1|p' config.toml 2> /dev/null)
+
+# The services up that use the GPU, as JSON strings: "ollama","cli"
+gpu() {
+    $docker ps --filter label=com.docker.compose.project=unadcast --format '{{.Label "com.docker.compose.service"}}' 2> /dev/null \
+        | grep -xE 'ollama|cli|worker' | sed 's/.*/"&"/' | tr '\n' , | sed 's/,$//'
+}
+
+# Percent of the GPU's memory in use. Through the processing image: nvidia-smi doesn't run on Alpine. 0 if unknown.
+load() {
+    $docker compose run --rm -T --no-deps --entrypoint nvidia-smi cli --query-gpu=memory.used,memory.total \
+        --format=csv,noheader,nounits 2> /dev/null | awk -F, 'NR == 1 && $2 > 0 { print int($1 * 100 / $2) }' | grep . || echo 0
+}
+
+checkin() {
+    [ -n "$api" ] || return 0
+    postponed=$(cat "$state/postponed" 2>/dev/null || echo 0)
+    wget -q -T 10 -O /dev/null --header "Content-Type: application/json" --post-data \
+        "{\"host\": \"$host\", \"dir\": \"$root\", \"busy\": $1, \"gpu\": [$(gpu)], \"postponed\": $postponed}" "$api/pc" 2>/dev/null || true
+}
+
+# The admin page's {"requested": <time>, "stop": <time>}, one field at a time; 0 when the admin page doesn't answer.
+field() {
+    v=$( { [ -n "$api" ] && wget -q -T 10 -O - "$api/run" 2>/dev/null; } | sed -nE "s/.*\"$1\": *([0-9]+).*/\1/p") || true
+    echo "${v:-0}"
+}
+
+requested=$(field requested)
+stopped=$(field stop)
+paused=$(field pause)
+handled=$(cat "$state/handled" 2>/dev/null || echo 0)
+last=$(cat "$state/last-pass" 2>/dev/null || echo 0)
+now=$(date +%s)
+
+# "Stop" (and "Pause") between passes: free the GPU of anything left running, e.g. ollama from a pass started by hand.
+if [ "$stopped" -gt "$(cat "$state/stopped" 2>/dev/null || echo 0)" ]; then
+    echo "$stopped" > "$state/stopped"
+    echo "stop pressed on the admin page"
+    DOCKER=$docker "$here/stop"
+fi
+
+# "Stop" also cancels a "Process now" pressed before it.
+if [ "$requested" -gt "$handled" ] && [ "$requested" -gt "$stopped" ]; then
+    reason=requested
+elif [ "$every" -gt 0 ] && [ $((now - last)) -ge $((every * 3600)) ]; then
+    reason=scheduled
+else
+    checkin false
+    exit 0
+fi
+# Waiting leaves the request unhandled, so it runs when the pause or postponement ends.
+if [ "$paused" -gt "$now" ] || [ "$(cat "$state/postponed" 2>/dev/null || echo 0)" -gt "$now" ]; then
+    checkin false
+    exit 0
+fi
+used=$(load)
+if [ "$used" -ge "$busy" ]; then
+    echo $((now + 3600)) > "$state/postponed"
+    echo "GPU memory ${used}% in use by something else: $reason pass postponed by an hour"
+    checkin false
+    exit 0
+fi
+# Recorded before the pass: a pass that fails must not be retried every 30 s.
+echo "$requested" > "$state/handled"
+echo "$now" > "$state/last-pass"
+echo "pass ($reason)"
+checkin true
+
+trap '$docker compose --profile llm stop ollama; checkin false' EXIT
+$docker compose --profile llm up -d ollama
+$docker compose run --rm -T cli unadcast run &
+pass=$!
+while kill -0 "$pass" 2> /dev/null; do
+    sleep "$poll"
+    checkin true
+    stopped=$(field stop)
+    if [ "$stopped" -ge "$now" ]; then
+        echo "$stopped" > "$state/stopped"
+        echo "stop pressed on the admin page"
+        DOCKER=$docker "$here/stop"
+        kill "$pass" 2> /dev/null || true
+        break
+    fi
+done
+wait "$pass" 2> /dev/null || true

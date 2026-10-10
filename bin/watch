@@ -1,0 +1,8 @@
+#!/bin/sh
+# The watcher container's whole job: check every 30 s whether a pass is wanted (bin/on-demand).
+cd "$(dirname "$0")/.."
+docker info > /dev/null 2>&1 || echo "can't use the docker socket: set DOCKER_GID in .env to its group (stat -c %g /var/run/docker.sock)"
+while true; do
+    bin/on-demand || echo "check failed; trying again in 30 s"
+    sleep 30
+done

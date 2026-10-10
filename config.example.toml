@@ -1,0 +1,51 @@
+# Copy to config.toml. Only what differs from the defaults needs to be here; every key and its default is in
+# unadcast/config.py. Changing a setting reruns exactly the stages that depend on it, on the next pass.
+
+# Where the admin page and the published feeds are comes from UNADCAST_SERVER in .env. To set them apart:
+# feeds_url = "http://<serving machine>:8765/admin/api/feeds"
+# [serve]
+# base_url = "http://<serving machine>:8765"
+
+[publish]
+# "mark": ads become chapters ("Ad", "Ad?"), the audio is untouched. "cut": ads are removed. Feeds can override this.
+mode = "mark"
+# Episodes not processed (yet, or older than a feed's `keep`): "original" lists them with the publisher's audio, so the
+# feed stays complete and an app keeps its played state for them; "hide" leaves them out.
+unprocessed = "original"
+
+# --- Features. Each detector votes independently; switching one off just removes its votes. ---
+
+[detect.repeat]
+# Audio that recurs across episodes and feeds: network ad blocks, house promos. The strongest signal; cheap (CPU).
+enabled = true
+
+[detect.voice]
+# Voices the episode barely uses: announcer-read spots. Extends cuts across a whole break. ~45 s CPU per audio hour.
+enabled = true
+
+[detect.loudness]
+# Stretches mastered louder or quieter than the show. Weak alone; corroborates. Free.
+enabled = true
+
+[transcribe]
+# Whisper on the GPU, ~1 min per audio hour. Needed by detect.llm; nothing else reads it.
+enabled = true
+
+[detect.llm]
+# A local LLM reads the transcript: catches host-read ads, which sound like the show. ~1 min per audio hour (GPU).
+enabled = true
+
+[llm]
+# Any Ollama model, or backend = "openai" with base_url, model and api_key_env for an OpenAI-compatible server.
+backend = "ollama"
+model = "qwen3.5:9b-q4_K_M"
+
+# --- Shows. Normally added on the admin page. Shows listed here are processed too, but don't appear on the page. ---
+# `bin/unadcast find "show name"` prints entries like this one.
+
+# [[feeds]]
+# slug = "the-vergecast"
+# url = "https://feeds.megaphone.fm/vergecast"
+# # How many of the newest episodes to process. Older ones fall back to `unprocessed`.
+# keep = 10
+# mode = "mark"
