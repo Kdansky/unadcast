@@ -393,7 +393,7 @@ async function refresh() {
   latest = {t: now(), st, run, pc, on, busy, gpu};
 
   const lines = [];
-  if (st.unreadable) lines.push('<span class="bad">Can\'t read the status file</span> <span class="muted">· is the share (NAS) it lives on reachable?</span>');
+  if (st.unreadable) lines.push('<span class="bad">Can\\'t read the status file</span> <span class="muted">· is the share (NAS) it lives on reachable?</span>');
   lines.push(!pc.seen ? "The processing PC hasn't checked in yet: is its watcher running?"
     : on ? `PC <b>${esc(pc.host)}</b> is on <span class="muted">· checked in ${at(pc.seen)}</span>`
     : `<span class="bad">PC <b>${esc(pc.host)}</b> is off, or its watcher stopped</span> <span class="muted">· last checked in ${at(pc.seen)}; passes wait until it's back</span>`);

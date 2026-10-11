@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 import time
 
 import pytest
@@ -139,3 +141,11 @@ def test_pending_feed(client, paths, feed_url):
     assert [(i.findtext("title"), i.findtext("description"), i.findtext("link")) for i in items] == [
         ("Test Show: ep1", "failed: boom", "http://pi:8765/admin/")
     ]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_page_script_parses(tmp_path):
+    # A syntax error anywhere stops the whole script, and the page shows nothing; Python escapes in PAGE cause them.
+    js = tmp_path / "page.js"
+    js.write_text(admin.PAGE.split("<script>")[1].split("</script>")[0])
+    subprocess.run(["node", "--check", str(js)], check=True)
