@@ -11,3 +11,4 @@ todo.md
 .env
 .env.*
 !.env.example
+debug/

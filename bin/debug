@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Run every stage on the host over the newest episode of one show and look at the result, without touching data/ or the
+# published feeds: bin/debug [--force] [stage ...]. Everything lands in debug/ (gitignored):
+#   debug/config.toml   the show and settings (written on first run; edit it to change the show)
+#   debug/cuts.txt      what is cut or marked, with the words at each edge
+#   debug/out.mp3       the result; debug/original.mp3 is the file as downloaded, for comparing
+# Stage names rerun only those stages: bin/debug fuse cut after tuning [fuse].
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export HF_HOME=$PWD/data/models/huggingface
+unset UNADCAST_SERVER
+mkdir -p debug/data
+# A copy of production's database, so the repeat detector has the same history to match against.
+[ -f debug/data/unadcast.db ] || cp data/unadcast.db debug/data/
+[ -f debug/config.toml ] || cat > debug/config.toml <<'EOF'
+[paths]
+data = "data"
+models = "../data/models"
+labels = "../labels"
+public = "public"
+
+[llm]
+base_url = "http://localhost:11434"
+
+[[feeds]]
+slug = "the-vergecast"
+url = "https://feeds.megaphone.fm/vergecast"
+keep = 1
+mode = "cut"
+EOF
+if ! curl -sf localhost:11434 > /dev/null; then
+  ollama serve > debug/ollama.log 2>&1 &
+  trap 'kill $!' EXIT
+  until curl -sf localhost:11434 > /dev/null; do sleep 0.5; done
+fi
+
+force=(); [ "${1:-}" = --force ] && { force=(--force); shift; }
+un=(.venv/bin/unadcast --config debug/config.toml)
+if [ $# -eq 0 ]; then
+  "${un[@]}" run
+else
+  for st in "$@"; do "${un[@]}" stage "$st" "${force[@]}"; done
+fi
+
+work=$(ls -d debug/data/work/*/*/ | head -1)
+id=$(basename "$work")
+"${un[@]}" cuts "$id" | tee debug/cuts.txt
+ln -sf "${work#debug/}out.mp3" debug/out.mp3
+ln -sf "${work#debug/}original" debug/original.mp3

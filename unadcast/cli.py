@@ -7,7 +7,7 @@ import httpx
 
 from . import config, evaluate, runner
 from .core import Ctx
-from .stages import STAGES
+from .stages import STAGES, cut, fuse
 
 
 def find_episode(ctx, key):
@@ -66,6 +66,21 @@ def cmd_spans(ctx, a):
         print(n, s["start"], s["end"], s["action"], ep.path("original").relative_to(ctx.data), sep="\t")
 
 
+def cmd_cuts(ctx, a):
+    """Every cut and mark with the words around its edges, and where each cut lands in the output, for checking by ear."""
+    ep = find_episode(ctx, a.episode)
+    plan = ep.load("plan.json")
+    words = ep.load("transcript.json")["words"] if ep.path("transcript.json").exists() else []
+    say = lambda x, y: "".join(w[2] for w in words if x <= w[0] and w[1] <= y).strip()
+    keep, cf = plan["keep"], ctx.cfg["publish"]["crossfade"]
+    print(f"{ep.title}: {len(plan['cuts'])} cuts, {len(plan['marks'])} marks, {plan['removed']:.0f} s of {plan['duration']:.0f} s")
+    for n, s in enumerate(sorted(plan["cuts"] + plan["marks"], key=lambda s: s["start"]), 1):
+        a, b = s["start"], s["end"]
+        where = f", join at {fuse.clock(cut.remap(a, keep, cf))} in the output" if s["action"] == "cut" else ""
+        print(f"\n#{n} {s['action']} {fuse.clock(a)} - {fuse.clock(b)} ({b - a:.0f} s) p={s['p']:.2f} {s['kind']}{where}")
+        print(f"  before: ...{say(a - 12, a)}\n  starts: {say(a, a + 15)}\n  ends:   ...{say(b - 15, b)}\n  after:  {say(b, b + 12)}...")
+
+
 def cmd_eval(ctx, a):
     print(evaluate.report(evaluate.evaluate(ctx, set(a.only) if a.only else None)))
 
@@ -99,6 +114,8 @@ def main(argv=None):
     s = sub.add_parser("report", help="print an episode's report")
     s.add_argument("episode")
     s = sub.add_parser("spans", help="tab-separated spans of an episode")
+    s.add_argument("episode")
+    s = sub.add_parser("cuts", help="cuts and marks with the words at their edges")
     s.add_argument("episode")
     s = sub.add_parser("eval", help="score plans against labels/<feed>/<episode>.json, with the current config")
     s.add_argument("--only", action="append", help="fuse only this detector's votes (repeatable)")

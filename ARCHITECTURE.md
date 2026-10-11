@@ -84,6 +84,7 @@ bin/
   unadcast       the CLI inside the container
   install        validates .env, then sets up processing here and serving here or over ssh; rerun for any change
   play           listen to a detected span on the host
+  debug          every stage on the host over one show's newest episode, into debug/, away from data/ and the feeds
   pending        desktop notification when episodes wait for a pass, from the admin page's pending.xml; a systemd user timer
   test           the test suite inside the image
 serve/           nginx config, admin image
