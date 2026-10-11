@@ -27,6 +27,11 @@ address at the end.
   can check by ear and skip with one tap. Switch a show to **cut** once its chapters look right.
 - **Episodes**: how many of the newest episodes to process, 10 by default, newest first. Older ones stay in the feed with
   the publisher's original audio.
+- **Waiting episodes**: `bin/pending install`, on a Linux desktop, sets up a notification for when new episodes wait
+  for a pass, with buttons to start one or open the admin page. It checks every 15 minutes and announces each episode
+  once; `bin/pending uninstall` removes it. It reads `http://<serving machine>:8765/admin/pending.xml`, a feed of the
+  episodes a pass would process that aren't done yet, failed ones included. The serving machine reads the shows' feeds
+  itself for it, so it knows while the processing machine is off. A cloud feed reader can't reach it on your LAN.
 - **Process now**: starts a pass on the processing machine within half a minute, if it's on; otherwise as soon as it is. Adding a show
   presses it for you. Without clicking, a pass also runs when the last one is more than 12 hours old.
 - **Stop**: stops a running pass within about 10 seconds, and cancels a "Process now" that hasn't started yet. The step

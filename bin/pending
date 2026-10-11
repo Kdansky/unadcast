@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# A desktop notification when episodes wait for a pass (the admin page's pending.xml), with buttons to start one or open
+# the admin page. Each episode is announced once. A systemd user timer runs it every 15 minutes: `bin/pending install` sets
+# that up, `bin/pending uninstall` removes it.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+units=~/.config/systemd/user
+
+case ${1:-} in
+install)
+    command -v notify-send > /dev/null || { echo "notify-send is missing (libnotify): it shows the notification" >&2; exit 1; }
+    mkdir -p "$units"
+    printf '%s\n' "[Unit]" "Description=unadcast: announce episodes waiting for a pass" "[Service]" "Type=oneshot" \
+        "ExecStart=\"$root/bin/pending\"" > "$units/unadcast-pending.service"
+    printf '%s\n' "[Unit]" "Description=unadcast: look for waiting episodes every 15 minutes" "[Timer]" "OnBootSec=2min" \
+        "OnUnitActiveSec=15min" "[Install]" "WantedBy=timers.target" > "$units/unadcast-pending.timer"
+    systemctl --user daemon-reload
+    systemctl --user enable --now unadcast-pending.timer
+    exit ;;
+uninstall)
+    systemctl --user disable --now unadcast-pending.timer || true
+    rm -f "$units/unadcast-pending.service" "$units/unadcast-pending.timer"
+    systemctl --user daemon-reload
+    exit ;;
+esac
+
+server=${UNADCAST_SERVER:-$(sed -nE 's/^UNADCAST_SERVER=//p' "$root/.env" 2> /dev/null | tail -1)}
+[ -n "$server" ] || { echo "no UNADCAST_SERVER in .env: run bin/install first" >&2; exit 1; }
+seen=$root/data/pending-announced
+touch "$seen"
+# The serving machine reads every show's feed for this, which can take a while; if it is down, there is nothing to say.
+xml=$(curl -fsS -m 120 "$server/admin/pending.xml") || exit 0
+
+# id<TAB>title per waiting episode, titles escaped for the notification's markup.
+waiting=$(python3 -c '
+import html, sys, xml.etree.ElementTree as ET
+for i in ET.fromstring(sys.stdin.read()).iter("item"):
+    print(i.findtext("guid"), html.escape(i.findtext("title")), sep="\t")' <<< "$xml")
+new=$(cut -f1 <<< "$waiting" | grep . | grep -vxFf "$seen" || true)
+# Only what still waits, so an episode that comes back is announced again.
+cut -f1 <<< "$waiting" > "$seen"
+[ -n "$new" ] || exit 0
+
+n=$(wc -l <<< "$new")
+body=$(grep -F -f <(sed 's/$/\t/' <<< "$new") <<< "$waiting" | cut -f2)
+case $(timeout 3600 notify-send -a unadcast -i media-podcast "unadcast: $n new episode$([ "$n" = 1 ] || echo s) to process" "$body" \
+        -A run="Process now" -A open="Open admin page" || true) in
+run) curl -fsS -m 10 -X POST -o /dev/null "$server/admin/api/run" ;;
+open) xdg-open "$server/admin/" ;;
+esac

@@ -4,12 +4,14 @@ Standalone on purpose: starlette, httpx and the standard library only, so it run
 processing machine reads the show list from /admin/api/feeds and polls /admin/api/run between passes.
 """
 
+import hashlib
 import json
 import os
 import re
 import threading
 import time
 import xml.etree.ElementTree as ET
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 
 import httpx
@@ -20,6 +22,8 @@ from starlette.routing import Route
 
 MODES = ("mark", "cut")
 DETECTORS = ("repeat", "voice", "loudness", "llm")
+# How long the pending feed trusts its last look at a show's own feed: readers poll often, publishers mind.
+FRESH = 900
 
 
 def itunes(term):
@@ -43,6 +47,28 @@ def title_of(url):
     return title.strip()
 
 
+def items_of(url):
+    """(guid, title, published) of each episode with audio, newest first, read as the processing machine reads them."""
+    r = httpx.get(url, follow_redirects=True, timeout=20, headers={"User-Agent": "unadcast/0.1"})
+    r.raise_for_status()
+    out = []
+    for el in ET.fromstring(r.content).iter("item"):
+        enc = el.find("enclosure")
+        if enc is None or not enc.get("url"):
+            continue
+        try:
+            published = parsedate_to_datetime(el.findtext("pubDate").strip()).timestamp()
+        except (AttributeError, TypeError, ValueError):
+            published = 0
+        out.append(((el.findtext("guid") or "").strip() or enc.get("url"), (el.findtext("title") or "").strip(), published))
+    return sorted(out, key=lambda e: -e[2])
+
+
+def episode_id(slug, guid):
+    """The processing machine's id for an episode, as status.json names it."""
+    return hashlib.sha1(f"{slug}\n{guid}".encode()).hexdigest()[:12]
+
+
 def slugify(title, taken):
     base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "show"
     slug, n = base, 2
@@ -57,6 +83,7 @@ def app(feeds_path, status_path):
     pc_path = feeds_path.with_name("pc.json")
     settings_path = feeds_path.with_name("settings.json")
     lock = threading.Lock()
+    fetched = {}
 
     def load(path, empty):
         try:
@@ -146,6 +173,44 @@ def app(feeds_path, status_path):
         except OSError:
             return JSONResponse({"unreadable": True})
 
+    def pending(request):
+        """RSS of the episodes a pass would process that aren't done yet. The PC may be off, so the shows' own feeds are
+        read here; each item links to this page, to press Process now."""
+        try:
+            known = load(status_path, {}).get("feeds", {})
+        except OSError:
+            known = {}
+        home = f"http://{request.headers.get('host', 'localhost')}/admin/"
+        items = []
+        for f in load(feeds_path, []):
+            t, eps = fetched.get(f["url"], (0, []))
+            if time.time() - t > FRESH:
+                try:
+                    eps = items_of(f["url"])
+                    fetched[f["url"]] = time.time(), eps
+                except (httpx.HTTPError, ET.ParseError):
+                    pass
+            eps = [e for e in eps if not any(x.lower() in e[1].lower() for x in f.get("exclude", []))][: f["keep"]]
+            state = {e["id"]: e for e in known.get(f["slug"], {}).get("episodes", [])}
+            for guid, title, published in eps:
+                ep = state.get(episode_id(f["slug"], guid), {})
+                if ep.get("state") != "done":
+                    items.append((published, episode_id(f["slug"], guid), f"{f.get('title') or f['slug']}: {title}",
+                                  f"failed: {ep.get('error')}" if ep.get("state") == "failed" else "waiting for a pass"))
+        rss = ET.Element("rss", version="2.0")
+        ch = ET.SubElement(rss, "channel")
+        for k, v in (("title", "unadcast: waiting"), ("link", home), ("description", "New episodes not processed yet")):
+            ET.SubElement(ch, k).text = v
+        for published, id, title, what in sorted(items, reverse=True):
+            it = ET.SubElement(ch, "item")
+            for k, v in (("title", title), ("link", home), ("description", what)):
+                ET.SubElement(it, k).text = v
+            ET.SubElement(it, "guid", isPermaLink="false").text = id
+            if published:
+                ET.SubElement(it, "pubDate").text = formatdate(published, usegmt=True)
+        return Response(ET.tostring(rss, encoding="utf-8", xml_declaration=True), media_type="application/rss+xml",
+                        headers={"Cache-Control": "no-cache"})
+
     async def run(request: Request):
         if request.method == "POST":
             request_run()
@@ -195,6 +260,7 @@ def app(feeds_path, status_path):
 
     return Starlette(routes=[
         Route("/admin/", page),
+        Route("/admin/pending.xml", pending),
         Route("/admin/api/feeds", list_feeds),
         Route("/admin/api/feeds", add, methods=["POST"]),
         Route("/admin/api/feeds/{slug}", edit, methods=["PATCH"]),
@@ -251,7 +317,9 @@ time { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6p
 
 <h2>Shows</h2>
 <p class="muted">Subscribe to the address under each show in your podcast app. New shows start in <b>mark</b> mode
-(ads become chapters, nothing is cut); switch to <b>cut</b> once the chapters look right.</p>
+(ads become chapters, nothing is cut); switch to <b>cut</b> once the chapters look right.
+<a href="/admin/pending.xml">This feed</a> lists new episodes waiting for a pass; on the processing PC, <span class="url">bin/pending install</span>
+turns it into a desktop notification.</p>
 <div id="shows"></div>
 
 <h2>Detectors</h2>

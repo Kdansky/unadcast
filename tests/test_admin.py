@@ -122,3 +122,20 @@ def test_pause(client):
 def test_status_survives_an_unreadable_share(client, paths):
     paths[1].mkdir()
     assert client.get("/admin/api/status").json() == {"unreadable": True}
+
+
+def test_pending_feed(client, paths, feed_url):
+    from unadcast.stages.poll import episode_id
+
+    assert admin.episode_id("s", "g") == episode_id("s", "g")
+    slug = client.post("/admin/api/feeds", json={"url": feed_url}).json()["slug"]
+    client.patch(f"/admin/api/feeds/{slug}", json={"keep": 2, "exclude": ["EP3"]})
+    eps = [{"id": episode_id(slug, "guid-ep2"), "state": "done"}, {"id": episode_id(slug, "guid-ep1"), "state": "failed", "error": "boom"}]
+    paths[1].write_text(json.dumps({"feeds": {slug: {"episodes": eps}}}))
+    r = client.get("/admin/pending.xml", headers={"host": "pi:8765"})
+    assert r.headers["content-type"].startswith("application/rss+xml")
+    items = admin.ET.fromstring(r.content).findall("channel/item")
+    # ep3 is excluded, ep2 done; ep1 failed and so still waits.
+    assert [(i.findtext("title"), i.findtext("description"), i.findtext("link")) for i in items] == [
+        ("Test Show: ep1", "failed: boom", "http://pi:8765/admin/")
+    ]

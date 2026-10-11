@@ -84,6 +84,7 @@ bin/
   unadcast       the CLI inside the container
   install        validates .env, then sets up processing here and serving here or over ssh; rerun for any change
   play           listen to a detected span on the host
+  pending        desktop notification when episodes wait for a pass, from the admin page's pending.xml; a systemd user timer
   test           the test suite inside the image
 serve/           nginx config, admin image
 docker-compose.yml   every service, by profile: process, serve, llm, always, cli, test
@@ -98,6 +99,7 @@ On disk, under `paths.data` (default `data/`):
 unadcast.db                          feeds, episodes, failures, fingerprint index
 remote-feeds.json, remote-settings.json   last answers from the admin page (used when it is unreachable)
 watcher/handled, watcher/last-pass   bin/on-demand's memory: last request served, last pass started
+pending-announced                    bin/pending's memory: episodes already announced
 models/                              Whisper (huggingface/), speaker model (wespeaker-resnet34-LM.onnx)
 work/<feed>/feed.xml                 the original feed as last fetched; publish rewrites a copy of it
 work/<feed>/<episode-id>/
@@ -373,6 +375,7 @@ when that is another machine, and writes its `.env`):
 | Endpoint | |
 |---|---|
 | `GET /admin/` | the page |
+| `GET /admin/pending.xml` | RSS of the episodes a pass would process (newest `keep`, minus `exclude`) that `status.json` doesn't call done; reads the shows' feeds itself, cached 15 min, as the PC may be off. Items link to `/admin/`, so nginx passes the `Host` with its port |
 | `GET /admin/api/feeds` | the show list; the PC reads it as `feeds_url` |
 | `POST /admin/api/feeds` `{"url"}` | add: the feed is fetched to validate it and take its title; slug from title; starts in mark mode, 10 episodes; requests a pass |
 | `PATCH /admin/api/feeds/<slug>` `{"mode", "keep", "exclude"}` | `mark`/`cut`, 1–50, title phrases to skip |
