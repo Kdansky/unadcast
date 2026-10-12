@@ -27,7 +27,10 @@ def test_add_list_edit_remove(client, paths, feed_url):
     assert (f["slug"], f["title"], f["keep"], f["mode"]) == ("test-show", "Test Show", 10, "mark")
     assert client.get("/admin/api/feeds").json() == [f]
 
+    before = client.get("/admin/api/run").json()["requested"]
     assert client.patch("/admin/api/feeds/test-show", json={"mode": "cut", "keep": 3}).json()["mode"] == "cut"
+    # Applying an edit takes a pass, so it asks for one.
+    assert client.get("/admin/api/run").json()["requested"] > before
     assert client.patch("/admin/api/feeds/test-show", json={"mode": "chop"}).status_code == 400
     assert client.patch("/admin/api/feeds/test-show", json={"keep": 0}).status_code == 400
     assert client.patch("/admin/api/feeds/test-show", json={"keep": 500}).status_code == 400
@@ -64,6 +67,14 @@ def test_status_and_page(client, paths):
     assert client.get("/admin/api/status").json()["updated"] == 1
     page = client.get("/admin/")
     assert page.status_code == 200 and "unadcast" in page.text and "/admin/api/" in page.text
+
+
+def test_status_over_http(paths, server):
+    # From the `files` container: not there yet is no pass yet; no answer is storage unreachable.
+    assert TestClient(admin.app(paths[0], f"{server}/status.json")).get("/admin/api/status").json() == {}
+    assert TestClient(admin.app(paths[0], "http://127.0.0.1:1/status.json")).get("/admin/api/status").json() == {"unreadable": True}
+    assert TestClient(admin.app(paths[0], "http://127.0.0.1:1/status.json")).get("/admin/pending.xml").status_code == 503
+    assert TestClient(admin.app(paths[0], "http://127.0.0.1:1/status.json")).get("/admin/api/waiting").json() == {"unreadable": True}
 
 
 def test_pc_checks_in(client):
@@ -132,7 +143,10 @@ def test_pending_feed(client, paths, feed_url):
     assert admin.episode_id("s", "g") == episode_id("s", "g")
     slug = client.post("/admin/api/feeds", json={"url": feed_url}).json()["slug"]
     client.patch(f"/admin/api/feeds/{slug}", json={"keep": 2, "exclude": ["EP3"]})
-    eps = [{"id": episode_id(slug, "guid-ep2"), "state": "done"}, {"id": episode_id(slug, "guid-ep1"), "state": "failed", "error": "boom"}]
+    # Status unreadable, as when the share it lives on is down: an error, not every episode announced as undone.
+    paths[1].write_text("{")
+    assert client.get("/admin/pending.xml").status_code == 503
+    eps =[{"id": episode_id(slug, "guid-ep2"), "state": "done"}, {"id": episode_id(slug, "guid-ep1"), "state": "failed", "error": "boom"}]
     paths[1].write_text(json.dumps({"feeds": {slug: {"episodes": eps}}}))
     r = client.get("/admin/pending.xml", headers={"host": "pi:8765"})
     assert r.headers["content-type"].startswith("application/rss+xml")
@@ -141,6 +155,8 @@ def test_pending_feed(client, paths, feed_url):
     assert [(i.findtext("title"), i.findtext("description"), i.findtext("link")) for i in items] == [
         ("Test Show: ep1", "failed: boom", "http://pi:8765/admin/")
     ]
+    # The same, for the page's Process now button.
+    assert [e["title"] for e in client.get("/admin/api/waiting").json()["episodes"]] == ["Test Show: ep1"]
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="needs node")

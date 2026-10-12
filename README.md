@@ -32,8 +32,10 @@ address at the end.
   once; `bin/pending uninstall` removes it. It reads `http://<serving machine>:8765/admin/pending.xml`, a feed of the
   episodes a pass would process that aren't done yet, failed ones included. The serving machine reads the shows' feeds
   itself for it, so it knows while the processing machine is off. A cloud feed reader can't reach it on your LAN.
-- **Process now**: starts a pass on the processing machine within half a minute, if it's on; otherwise as soon as it is. Adding a show
-  presses it for you. Without clicking, a pass also runs when the last one is more than 12 hours old.
+- **Process now**: starts a pass on the processing machine within half a minute, if it's on; otherwise as soon as it is. Adding a show,
+  or changing one's mode, episodes or skipped titles, presses it for you. Without clicking, a pass also runs when the
+  last one is more than 12 hours old. It counts the episodes waiting, and is greyed out when there are none, or when the
+  NAS is unreachable, as a pass couldn't publish anything then.
 - **Stop**: stops a running pass within about 10 seconds, and cancels a "Process now" that hasn't started yet. The step
   it was on is simply redone next time; nothing half-finished is kept.
 - **GPU**: the status says whether anything of unadcast is on the processing machine's graphics card right now: Ollama (the language
@@ -152,7 +154,7 @@ What runs when:
 | | between passes | during a pass |
 |---|---|---|
 | processing | `watcher` (a shell loop, a few MB) | + `ollama` (GPU) and a `cli` pass container |
-| serving | `web` (nginx) and `admin` | same |
+| serving | `web` and `files` (nginx), `admin`, `remount` (a shell loop) | same |
 
 A pass takes a few minutes per hour-long new episode (the first pass for a new show does `keep` episodes at once);
 passes with nothing new take seconds. To change how often passes run without clicking, set `UNADCAST_EVERY` (hours,
@@ -208,6 +210,8 @@ the next pass. The most useful:
 - **The NAS mount fails**: `journalctl -k | grep CIFS`. "Dialect not supported by server" means the NAS's SMB maximum
   is below 3; raise it (on Synology: DSM, File Services, SMB, Advanced) or set `NAS_SMB=2.0` in `.env`, then
   `bin/install`.
+- **The admin page says "Storage unreachable"**: the NAS is off or unreachable. Feeds and audio are offline until it is
+  back, and follow within a minute; the admin page keeps working.
 - **A show plays the original audio**: its episodes aren't processed yet, or are older than its episode count.
 - **Something was cut that shouldn't have been**: switch the show to mark, look at `bin/unadcast report`, and consider
   labelling the episode so `eval` measures any change you make.

@@ -77,13 +77,29 @@ def slugify(title, taken):
     return slug
 
 
-def app(feeds_path, status_path):
-    feeds_path, status_path = Path(feeds_path), Path(status_path)
+def app(feeds_path, status):
+    """`status` is where status.json is read: a URL (the `files` container, so this one starts without the share), or a path."""
+    feeds_path, status = Path(feeds_path), str(status)
     state_path = feeds_path.with_name("run.json")
     pc_path = feeds_path.with_name("pc.json")
     settings_path = feeds_path.with_name("settings.json")
     lock = threading.Lock()
     fetched = {}
+
+    def read_status():
+        """status.json; {} before the first pass; None when the storage it lives on is unreachable."""
+        try:
+            if not status.startswith("http"):
+                return json.loads(Path(status).read_text())
+            r = httpx.get(status, timeout=5)
+            if r.status_code == 404:
+                return {}
+            r.raise_for_status()
+            return r.json()
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, httpx.HTTPError):
+            return None
 
     def load(path, empty):
         try:
@@ -145,6 +161,8 @@ def app(feeds_path, status_path):
                 return JSONResponse({"error": "no such show"}, 404)
             f.update({k: body[k] for k in ("mode", "keep", "exclude") if k in body})
             save(feeds_path, feeds)
+            # Applying it takes a pass, and Process now is greyed out while every episode is done.
+            request_run()
         return JSONResponse(f)
 
     def remove(request):
@@ -166,21 +184,17 @@ def app(feeds_path, status_path):
             for r in results if r.get("feedUrl")
         ])
 
-    def status(request):
-        # status.json lives on the published share, which can be down while the admin page is fine.
-        try:
-            return JSONResponse(load(status_path, {}))
-        except OSError:
-            return JSONResponse({"unreadable": True})
+    def status_of(request):
+        st = read_status()
+        return JSONResponse({"unreadable": True} if st is None else st)
 
-    def pending(request):
-        """RSS of the episodes a pass would process that aren't done yet. The PC may be off, so the shows' own feeds are
-        read here; each item links to this page, to press Process now."""
-        try:
-            known = load(status_path, {}).get("feeds", {})
-        except OSError:
-            known = {}
-        home = f"http://{request.headers.get('host', 'localhost')}/admin/"
+    def waiting():
+        """The episodes a pass would process that aren't done yet, newest first, or None when status.json is unreachable:
+        then every episode would look undone. The PC may be off, so the shows' own feeds are read here."""
+        st = read_status()
+        if st is None:
+            return None
+        known = st.get("feeds", {})
         items = []
         for f in load(feeds_path, []):
             t, eps = fetched.get(f["url"], (0, []))
@@ -195,21 +209,33 @@ def app(feeds_path, status_path):
             for guid, title, published in eps:
                 ep = state.get(episode_id(f["slug"], guid), {})
                 if ep.get("state") != "done":
-                    items.append((published, episode_id(f["slug"], guid), f"{f.get('title') or f['slug']}: {title}",
-                                  f"failed: {ep.get('error')}" if ep.get("state") == "failed" else "waiting for a pass"))
+                    items.append({"published": published, "id": episode_id(f["slug"], guid), "title": f"{f.get('title') or f['slug']}: {title}",
+                                  "what": f"failed: {ep.get('error')}" if ep.get("state") == "failed" else "waiting for a pass"})
+        return sorted(items, key=lambda e: -e["published"])
+
+    def pending(request):
+        """RSS of waiting(); each item links to this page, to press Process now."""
+        items = waiting()
+        if items is None:
+            return Response("storage unreachable: can't read status.json", 503, media_type="text/plain")
+        home = f"http://{request.headers.get('host', 'localhost')}/admin/"
         rss = ET.Element("rss", version="2.0")
         ch = ET.SubElement(rss, "channel")
         for k, v in (("title", "unadcast: waiting"), ("link", home), ("description", "New episodes not processed yet")):
             ET.SubElement(ch, k).text = v
-        for published, id, title, what in sorted(items, reverse=True):
+        for e in items:
             it = ET.SubElement(ch, "item")
-            for k, v in (("title", title), ("link", home), ("description", what)):
+            for k, v in (("title", e["title"]), ("link", home), ("description", e["what"])):
                 ET.SubElement(it, k).text = v
-            ET.SubElement(it, "guid", isPermaLink="false").text = id
-            if published:
-                ET.SubElement(it, "pubDate").text = formatdate(published, usegmt=True)
+            ET.SubElement(it, "guid", isPermaLink="false").text = e["id"]
+            if e["published"]:
+                ET.SubElement(it, "pubDate").text = formatdate(e["published"], usegmt=True)
         return Response(ET.tostring(rss, encoding="utf-8", xml_declaration=True), media_type="application/rss+xml",
                         headers={"Cache-Control": "no-cache"})
+
+    def waiting_of(request):
+        items = waiting()
+        return JSONResponse({"unreadable": True} if items is None else {"episodes": items})
 
     async def run(request: Request):
         if request.method == "POST":
@@ -261,12 +287,13 @@ def app(feeds_path, status_path):
     return Starlette(routes=[
         Route("/admin/", page),
         Route("/admin/pending.xml", pending),
+        Route("/admin/api/waiting", waiting_of),
         Route("/admin/api/feeds", list_feeds),
         Route("/admin/api/feeds", add, methods=["POST"]),
         Route("/admin/api/feeds/{slug}", edit, methods=["PATCH"]),
         Route("/admin/api/feeds/{slug}", remove, methods=["DELETE"]),
         Route("/admin/api/search", search),
-        Route("/admin/api/status", status),
+        Route("/admin/api/status", status_of),
         Route("/admin/api/run", run, methods=["GET", "POST"]),
         Route("/admin/api/stop", stop, methods=["POST"]),
         Route("/admin/api/pause", pause, methods=["POST"]),
@@ -292,6 +319,7 @@ input, select, button { font: inherit; color: inherit; background: var(--card); 
 input[type=search], input[type=url] { flex: 1; min-width: 200px; }
 input[type=number] { width: 70px; }
 button { cursor: pointer; } button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
 .show { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .show .name { font-weight: 600; } .url { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
 details summary { cursor: pointer; color: var(--muted); margin-top: 6px; }
@@ -307,7 +335,7 @@ time { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6p
 </style></head>
 <body><main>
 <h1>unadcast</h1>
-<div class="row"><button id="run" class="primary">Process now</button><button id="stop">Stop</button><span id="pausing" class="row"></span></div>
+<div class="row"><button id="run" class="primary">Process now</button><button id="stop">Stop</button><span id="pausing" class="row"></span><span id="runwhy" class="muted"></span></div>
 <div class="card"><b>Status</b> <span id="asof" class="muted"></span><ul id="status" class="lines"></ul></div>
 
 <h2>Add a show</h2>
@@ -375,6 +403,20 @@ function copy(text) {
 }
 const mmss = s => Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0");
 
+// Episodes a pass would process: fetched apart from the rest, as reading the shows' own feeds can take seconds.
+let waiting = null;
+const loadWaiting = () => api("waiting").then(w => { waiting = w; runButton(); }).catch(() => {});
+// Process now, greyed out when a pass couldn't publish or would find nothing to do.
+function runButton() {
+  const b = document.getElementById("run"), n = waiting?.episodes?.length;
+  const why = latest?.st.unreadable || waiting?.unreadable ? "Storage unreachable: a pass couldn't publish anything"
+    : n === 0 ? "Nothing to process: every episode is done" : "";
+  b.disabled = !!why;
+  b.textContent = n ? `Process now (${n})` : "Process now";
+  b.title = n ? `${n} episode${n === 1 ? "" : "s"} waiting` : why;
+  document.getElementById("runwhy").textContent = why;
+}
+
 async function refresh() {
   let feeds, st, run, pc;
   try { [feeds, st, run, pc] = await Promise.all([api("feeds"), api("status"), api("run"), api("pc")]); }
@@ -391,9 +433,11 @@ async function refresh() {
   // Ollama holds the language model, a pass holds Whisper: together most of the card, which a game then lacks.
   const gpu = [...new Set((pc.gpu || []).map(g => ({ollama: "Ollama (language model)", cli: "a pass", worker: "the resident worker"}[g] || g)))];
   latest = {t: now(), st, run, pc, on, busy, gpu};
+  runButton();
+  loadWaiting();
 
   const lines = [];
-  if (st.unreadable) lines.push('<span class="bad">Can\\'t read the status file</span> <span class="muted">· is the share (NAS) it lives on reachable?</span>');
+  if (st.unreadable) lines.push('<span class="bad">Storage unreachable</span> <span class="muted">· the share (NAS) is off or unreachable: feeds and audio are offline, and episode states unknown, until it is back. Shows and settings here still work.</span>');
   lines.push(!pc.seen ? "The processing PC hasn't checked in yet: is its watcher running?"
     : on ? `PC <b>${esc(pc.host)}</b> is on <span class="muted">· checked in ${at(pc.seen)}</span>`
     : `<span class="bad">PC <b>${esc(pc.host)}</b> is off, or its watcher stopped</span> <span class="muted">· last checked in ${at(pc.seen)}; passes wait until it's back</span>`);
@@ -507,4 +551,4 @@ setInterval(refresh, 15000);
 
 def main():
     """For uvicorn --factory in the admin container."""
-    return app(os.environ.get("ADMIN_FEEDS", "/data/feeds.json"), os.environ.get("ADMIN_STATUS", "/srv/status.json"))
+    return app(os.environ.get("ADMIN_FEEDS", "/data/feeds.json"), os.environ.get("ADMIN_STATUS", "http://files/status.json"))

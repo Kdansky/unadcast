@@ -5,9 +5,7 @@ services:
     volumes: ["nas:/work/data/public"]
   cli:
     volumes: ["nas:/work/data/public"]
-  web:
-    volumes: ["nas:/srv:ro"]
-  admin:
+  files:
     volumes: ["nas:/srv:ro"]
 
 volumes:

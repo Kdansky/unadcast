@@ -122,7 +122,7 @@ compose config -q || die "docker compose doesn't accept the configuration above.
 
 # Out of the way while things change. A NAS volume keeps the options it was made with: made anew, it has the current ones.
 [ "$process" = no ] || compose stop watcher > /dev/null 2>&1 || true
-[ -n "$serve_host" ] || compose --profile serve rm -sf web admin > /dev/null 2>&1 || true
+[ -n "$serve_host" ] || compose --profile serve rm -sf web files remount admin > /dev/null 2>&1 || true
 [ -z "$nas" ] || docker volume rm unadcast_nas > /dev/null 2>&1 || true
 
 if [ "$process" = yes ]; then
@@ -157,15 +157,16 @@ fi
 serve_script='set -e
 docker info > /dev/null 2>&1 || { echo "error: can'\''t use Docker on $(hostname) as $(id -un): is it installed and running, and the user in the docker group?"; exit 1; }
 docker compose version > /dev/null 2>&1 || { echo "error: Docker Compose v2 is missing on $(hostname)"; exit 1; }
-docker compose --profile serve rm -sf web admin > /dev/null 2>&1 || true
+docker compose --profile serve rm -sf web files remount admin > /dev/null 2>&1 || true
 if command -v ss > /dev/null && ss -ltnH "sport = :$1" | grep -q .; then
     echo "error: port $1 on $(hostname) is in use by another program; set UNADCAST_PORT in .env"; exit 1
 fi
 [ "$2" = renew ] && { docker volume rm unadcast_nas > /dev/null 2>&1 || true; }
 mkdir -p data/public
-docker compose --profile serve up -d --build web admin
-# nginx looks the admin container up once; a rebuilt one may have a new address.
-docker compose restart web > /dev/null'
+docker compose --profile serve up -d --build web remount admin
+# The share may be down (a NAS that is off): the admin page works without it, and `remount` starts `files` once it is back.
+docker compose --profile serve up -d files 2> /dev/null \
+    || echo "warning: the published files (the NAS share) aren'\''t reachable from $(hostname). The admin page works; feeds and audio follow within a minute of the share coming back."'
 
 if [ -z "$serve_host" ]; then
     say "Serving"

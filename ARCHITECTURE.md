@@ -87,7 +87,7 @@ bin/
   debug          every stage on the host over one show's newest episode, into debug/, away from data/ and the feeds
   pending        desktop notification when episodes wait for a pass, from the admin page's pending.xml; a systemd user timer
   test           the test suite inside the image
-serve/           nginx config, admin image
+serve/           nginx configs (web, files), admin image
 docker-compose.yml   every service, by profile: process, serve, llm, always, cli, test
 compose.nas.yml, Dockerfile
 labels/          hand-made ad labels for evaluation
@@ -367,22 +367,32 @@ change by such a pass ending, Stop by a check-in after it with nothing on the GP
 The `serve` profile in `docker-compose.yml`, on the server (`bin/install` copies the files it needs there over ssh
 when that is another machine, and writes its `.env`):
 
-- **web** (`nginx:1.27.5-alpine`, `serve/nginx.conf`) on `UNADCAST_PORT` (8765) serves the published files read-only:
-  `application/rss+xml` feeds with `no-cache`, `audio/mpeg` with Range requests (podcast apps seek and resume with
-  them), `.part` files and a Synology `#recycle` folder hidden. `/` redirects to `/admin/`.
+- **web** (`nginx:1.27.5-alpine`, `serve/nginx.conf`) on `UNADCAST_PORT` (8765): `/admin/` to `admin`, the rest to
+  `files`, `/` redirects to `/admin/`. It mounts nothing and looks both up per request (Docker's DNS), so it starts,
+  and the admin page works, while `files` can't.
+- **files** (`nginx:1.27.5-alpine`, `serve/files.conf`) serves the published files read-only: `application/rss+xml`
+  feeds with `no-cache`, `audio/mpeg` with Range requests (podcast apps seek and resume with them), `.part` files and a
+  Synology `#recycle` folder hidden. The only serving container with the share mounted: when it is down, only this is.
+- **remount** (`docker:cli`, with the docker socket) runs `docker compose up -d files` every minute while `files` isn't
+  running. Docker mounts a volume only when it creates or starts a container, and gives up if that fails, so a share
+  that was down then (the NAS boots slower than the Pi after a power cut, or was off during `bin/install`) would keep
+  `files` down for good. Running ones ride out an outage: the kernel's CIFS client reconnects.
 - **admin** (`unadcast/admin.py` in `python:3.12-alpine`, `serve/admin.Dockerfile`, starlette + uvicorn + httpx)
-  behind nginx at `/admin/`. The show list and the rest of its state are JSON files in the `admin` volume.
+  behind `web` at `/admin/`. The show list and the rest of its state are JSON files in the `admin` volume; `status.json`
+  it fetches from `files` (`ADMIN_STATUS`, default `http://files/status.json`, or a path). 404 is "no pass yet"; no
+  answer is "storage unreachable", which the page says and `pending.xml` answers with 503.
 
 | Endpoint | |
 |---|---|
 | `GET /admin/` | the page |
-| `GET /admin/pending.xml` | RSS of the episodes a pass would process (newest `keep`, minus `exclude`) that `status.json` doesn't call done; reads the shows' feeds itself, cached 15 min, as the PC may be off. Items link to `/admin/`, so nginx passes the `Host` with its port |
+| `GET /admin/pending.xml` | RSS of the episodes a pass would process (newest `keep`, minus `exclude`) that `status.json` doesn't call done; reads the shows' feeds itself, cached 15 min, as the PC may be off. Items link to `/admin/`, so nginx passes the `Host` with its port. 503 when `status.json` is unreachable (the share is down), which `bin/pending` takes as nothing to say |
 | `GET /admin/api/feeds` | the show list; the PC reads it as `feeds_url` |
 | `POST /admin/api/feeds` `{"url"}` | add: the feed is fetched to validate it and take its title; slug from title; starts in mark mode, 10 episodes; requests a pass |
-| `PATCH /admin/api/feeds/<slug>` `{"mode", "keep", "exclude"}` | `mark`/`cut`, 1–50, title phrases to skip |
+| `PATCH /admin/api/feeds/<slug>` `{"mode", "keep", "exclude"}` | `mark`/`cut`, 1–50, title phrases to skip; requests a pass |
 | `DELETE /admin/api/feeds/<slug>` | stop processing it (its published files stay) |
 | `GET /admin/api/search?q=` | Apple's podcast directory |
-| `GET /admin/api/status` | `status.json` from the published files |
+| `GET /admin/api/waiting` | the same episodes as `pending.xml`, as JSON `{"episodes": [{"published", "id", "title", "what"}]}`, or `{"unreadable": true}`; greys out Process now when empty |
+| `GET /admin/api/status` | `status.json` from the published files; `{"unreadable": true}` when the share is unreachable |
 | `GET, POST /admin/api/run` | `{"requested": <time>, "stop": <time>}`; POST is "Process now" |
 | `POST /admin/api/stop` | "Stop": sets `stop`; the PC stops its pass and ollama within a poll and skips older requests |
 | `POST /admin/api/pause` | `{"hours": 0–24}`: sets `stop` and `pause` (now + hours); no pass starts before then. `0` resumes |
