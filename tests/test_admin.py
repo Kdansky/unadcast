@@ -92,6 +92,15 @@ def test_pc_checks_in(client):
     assert client.get("/admin/api/pc").json()["postponed"] == 1234
 
 
+def test_pass_output(client):
+    assert client.get("/admin/api/log").json() == {}
+    client.post("/admin/api/log", content="transcribe show/abc Episode 1\n", headers={"Content-Type": "text/plain"})
+    out = client.get("/admin/api/log").json()
+    assert out["text"] == "transcribe show/abc Episode 1\n" and abs(out["seen"] - time.time()) < 5
+    client.post("/admin/api/log", content="x" * 50000)
+    assert len(client.get("/admin/api/log").json()["text"]) == 20000
+
+
 def test_detector_settings(client, paths):
     assert client.get("/admin/api/settings").json() == {"detect": {"repeat": True, "voice": True, "loudness": True, "llm": True}}
     before = client.get("/admin/api/run").json()["requested"]

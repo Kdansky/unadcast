@@ -82,6 +82,7 @@ def app(feeds_path, status):
     feeds_path, status = Path(feeds_path), str(status)
     state_path = feeds_path.with_name("run.json")
     pc_path = feeds_path.with_name("pc.json")
+    log_path = feeds_path.with_name("log.json")
     settings_path = feeds_path.with_name("settings.json")
     lock = threading.Lock()
     fetched = {}
@@ -284,6 +285,13 @@ def app(feeds_path, status):
                            "seen": time.time()})
         return JSONResponse(load(pc_path, {}))
 
+    async def output(request: Request):
+        """The tail of the pass's output, sent by the processing machine every few seconds while it works and once when it ends."""
+        if request.method == "POST":
+            # Capped: the machine sends a tail, but anything that reaches the port may post.
+            save(log_path, {"text": (await request.body()).decode(errors="replace")[-20000:], "seen": time.time()})
+        return JSONResponse(load(log_path, {}))
+
     return Starlette(routes=[
         Route("/admin/", page),
         Route("/admin/pending.xml", pending),
@@ -298,6 +306,7 @@ def app(feeds_path, status):
         Route("/admin/api/stop", stop, methods=["POST"]),
         Route("/admin/api/pause", pause, methods=["POST"]),
         Route("/admin/api/pc", pc, methods=["GET", "POST"]),
+        Route("/admin/api/log", output, methods=["GET", "POST"]),
         Route("/admin/api/settings", settings, methods=["GET", "PUT"]),
     ])
 
@@ -328,6 +337,7 @@ ul.eps { margin: 6px 0 0; padding-left: 18px; } ul.eps li { margin: 2px 0; }
 ul.lines { list-style: none; margin: 6px 0 0; padding: 0; } ul.lines li { margin: 3px 0; }
 time { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6px; }
 .old { opacity: .5; }
+#output { font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; max-height: 40vh; overflow: auto; margin: 6px 0 0; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
 /* The one place responses appear: pinned to the bottom so it is in view wherever the click was. */
 #messages { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); box-shadow: 0 -2px 8px #0002; }
 #messages > div { max-width: 860px; margin: 0 auto; padding: 8px 16px; max-height: 35vh; overflow: auto; }
@@ -336,7 +346,7 @@ time { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6p
 <body><main>
 <h1>unadcast</h1>
 <div class="row"><button id="run" class="primary">Process now</button><button id="stop">Stop</button><span id="pausing" class="row"></span><span id="runwhy" class="muted"></span></div>
-<div class="card"><b>Status</b> <span id="asof" class="muted"></span><ul id="status" class="lines"></ul></div>
+<div class="card"><b>Status</b> <span id="asof" class="muted"></span><ul id="status" class="lines"></ul><pre id="output" hidden></pre></div>
 
 <h2>Add a show</h2>
 <div class="row"><input type="search" id="q" placeholder="Search by name"><button id="find">Search</button></div>
@@ -418,8 +428,8 @@ function runButton() {
 }
 
 async function refresh() {
-  let feeds, st, run, pc;
-  try { [feeds, st, run, pc] = await Promise.all([api("feeds"), api("status"), api("run"), api("pc")]); }
+  let feeds, st, run, pc, out;
+  try { [feeds, st, run, pc, out] = await Promise.all([api("feeds"), api("status"), api("run"), api("pc"), api("log")]); }
   catch (e) {
     document.getElementById("asof").innerHTML = `<span class="bad">· couldn't reach the admin page at ${clock(now())}; showing ${latest ? clock(latest.t) : "nothing"}</span>`;
     return;
@@ -450,7 +460,18 @@ async function refresh() {
   if (on) lines.push(gpu.length ? `<span class="bad">GPU in use by ${esc(gpu.join(", "))}</span> <span class="muted">· Stop frees it</span>` : 'GPU free <span class="muted">· nothing of unadcast on it</span>');
   const cmd = pc.dir ? `cd ${pc.dir} && bin/now` : "";
   if (cmd) lines.push(`<span class="muted">On the PC, to watch it work:</span> <span class="url">${esc(cmd)}</span> <button id="copycmd">Copy</button>`);
+  // Output sent before this pass started is the last pass's.
+  const live = busy && out.seen >= (st.started || 0);
+  if (out.text) lines.push(`<span class="muted">${live ? "Output of this pass" : "Output of the last pass"}, sent ${at(out.seen)}:</span>`);
   document.getElementById("status").innerHTML = lines.map(l => `<li>${l}</li>`).join("");
+  const pre = document.getElementById("output"), bottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 20;
+  pre.hidden = !out.text;
+  pre.classList.toggle("old", !live);
+  if (pre.textContent !== (out.text || "")) {
+    pre.textContent = out.text || "";
+    // Following the newest lines, unless they scrolled up to read.
+    if (bottom) pre.scrollTop = pre.scrollHeight;
+  }
   document.getElementById("asof").textContent = "· as of " + clock(now());
   if (cmd) document.getElementById("copycmd").onclick = () => copy(cmd).then(() => say("Copied the command"), e => say(e.message, true));
 

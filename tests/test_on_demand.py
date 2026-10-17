@@ -22,7 +22,7 @@ def root(tmp_path, media, server):
 echo "$@" >> {tmp_path}/calls
 case "$*" in
     *nvidia-smi*) echo "${{GPU_USED:-1000}}, 10000" ;;
-    "compose run"*) exec sleep "${{PASS_SECONDS:-0}}" ;;
+    "compose run"*) echo "transcribe show/abc Episode 1"; echo "telemetry noise" >&2; exec sleep "${{PASS_SECONDS:-0}}" ;;
     ps*) echo c0ffee ;;
 esac
 ''')
@@ -61,6 +61,14 @@ def test_requested_pass_starts_and_stops_containers(root, media):
     assert calls == ["compose --profile llm up -d ollama", "compose run --rm -T cli unadcast run", "compose --profile llm stop ollama"]
     # The same request again is not a new one.
     assert run(root)[1] == []
+
+
+def test_pass_output_is_kept_for_the_admin_page(root, media):
+    request(media, time.time() + 0.5)
+    out, _ = run(root)
+    # Still in the watcher's own log, and its tail, without the noise, ready to send.
+    assert "transcribe show/abc Episode 1" in out
+    assert (root / "data" / "watcher" / "pass.tail").read_text() == "transcribe show/abc Episode 1\n"
 
 
 def test_scheduled_pass_when_the_last_is_old(root, media):

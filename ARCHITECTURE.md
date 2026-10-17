@@ -100,6 +100,7 @@ On disk, under `paths.data` (default `data/`):
 unadcast.db                          feeds, episodes, failures, fingerprint index
 remote-feeds.json, remote-settings.json   last answers from the admin page (used when it is unreachable)
 watcher/handled, watcher/last-pass   bin/on-demand's memory: last request served, last pass started
+watcher/pass.log, watcher/pass.tail  the running or last pass's output, and the tail of it sent to the admin page
 pending-announced                    bin/pending's memory: episodes already announced
 models/                              Whisper (huggingface/), speaker model (wespeaker-resnet34-LM.onnx)
 work/<feed>/feed.xml                 the original feed as last fetched; publish rewrites a copy of it
@@ -155,7 +156,9 @@ docker compose --profile llm stop ollama        # always, also after a failure
 
 The pass runs in the background of `bin/on-demand`, which meanwhile reads `/admin/api/run` every `UNADCAST_POLL`
 seconds (default 10): a `stop` time later than the pass's start runs `bin/stop` (`docker stop` on every pass container,
-then ollama and the resident worker). Between passes, a `stop` newer than the last one handled (`data/watcher/stopped`)
+then ollama and the resident worker). Its output goes to `data/watcher/pass.log`, whose last 40 lines (minus telemetry
+noise) are posted as plain text to `/admin/api/log` every poll and once more at the end; the watcher's own log gets the
+whole file when the pass ends. Not through `tee`: `$!` would be tee's, and a stop would leave the pass running. Between passes, a `stop` newer than the last one handled (`data/watcher/stopped`)
 runs `bin/stop` too, so "Stop" also frees the GPU of an ollama or pass started by hand. A step's stamp is removed when the step starts, so an interrupted step is redone on the next pass. A
 "Process now" older than the last "Stop" is treated as cancelled. The watcher's next check comes only after a pass ends,
 and passes take a lock file, so two never overlap.
@@ -396,6 +399,7 @@ when that is another machine, and writes its `.env`):
 | `GET, POST /admin/api/run` | `{"requested": <time>, "stop": <time>}`; POST is "Process now" |
 | `POST /admin/api/stop` | "Stop": sets `stop`; the PC stops its pass and ollama within a poll and skips older requests |
 | `POST /admin/api/pause` | `{"hours": 0–24}`: sets `stop` and `pause` (now + hours); no pass starts before then. `0` resumes |
+| `GET, POST /admin/api/log` | the pass's output: POST plain text (the last 20000 characters are kept), GET `{"text", "seen"}` |
 | `GET, POST /admin/api/pc` | the PC's last check-in: `{"host", "dir", "busy", "gpu", "postponed", "seen"}` |
 | `GET, PUT /admin/api/settings` | `{"detect": {"repeat", "voice", "loudness", "llm": bool}}`; saving requests a pass |
 

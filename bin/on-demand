@@ -41,6 +41,13 @@ checkin() {
         "{\"host\": \"$host\", \"dir\": \"$root\", \"busy\": $1, \"gpu\": [$(gpu)], \"postponed\": $postponed}" "$api/pc" 2>/dev/null || true
 }
 
+# The tail of the pass's output, for the admin page. Plain text, as escaping log lines into JSON in busybox sh is fragile.
+sendlog() {
+    [ -n "$api" ] || return 0
+    grep -v telemetry "$state/pass.log" 2> /dev/null | tail -n 40 > "$state/pass.tail" || true
+    wget -q -T 10 -O /dev/null --header "Content-Type: text/plain" --post-file "$state/pass.tail" "$api/log" 2>/dev/null || true
+}
+
 # The admin page's {"requested": <time>, "stop": <time>}, one field at a time; 0 when the admin page doesn't answer.
 field() {
     v=$( { [ -n "$api" ] && wget -q -T 10 -O - "$api/run" 2>/dev/null; } | sed -nE "s/.*\"$1\": *([0-9]+).*/\1/p") || true
@@ -88,13 +95,15 @@ echo "$now" > "$state/last-pass"
 echo "pass ($reason)"
 checkin true
 
-trap '$docker compose --profile llm stop ollama; checkin false' EXIT
+trap '$docker compose --profile llm stop ollama; sendlog; checkin false' EXIT
 $docker compose --profile llm up -d ollama
-$docker compose run --rm -T cli unadcast run &
+# Into a file, not through tee: a stop kills $!, which for a pipeline would leave the pass writing on.
+$docker compose run --rm -T cli unadcast run > "$state/pass.log" 2>&1 &
 pass=$!
 while kill -0 "$pass" 2> /dev/null; do
     sleep "$poll"
     checkin true
+    sendlog
     stopped=$(field stop)
     if [ "$stopped" -ge "$now" ]; then
         echo "$stopped" > "$state/stopped"
@@ -105,3 +114,5 @@ while kill -0 "$pass" 2> /dev/null; do
     fi
 done
 wait "$pass" 2> /dev/null || true
+# The watcher's own log keeps every pass's output; live, it is on the admin page and in bin/now.
+cat "$state/pass.log"

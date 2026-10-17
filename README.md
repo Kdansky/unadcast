@@ -50,7 +50,8 @@ address at the end.
 - **Status**, at the top, is what is true now ("as of" the time it was last fetched, every 15 s): whether the
   processing PC is on, what it is doing ("Transcribing …, episode 3 of 12, this step since 21:04") or when the last
   pass ended, a pause, a postponement or a waiting request, the GPU, and the command that shows the same on the
-  processing machine, `bin/now`. Per show and episode: done (how much was cut), waiting, or failed.
+  processing machine, `bin/now`. Below it, the pass's last 40 lines of output, sent every 10 s while it runs and
+  greyed out once it ends. Per show and episode: done (how much was cut), waiting, or failed.
 - **Messages**, pinned to the bottom, are the answers to what you clicked, with the time. Each says what it is waiting
   for and, once that has happened, what came of it ("Pass requested → pass started 21:04", "cut mode → applied by the
   pass that ended 21:30"); those, and anything older than ten minutes, are greyed out as history. × clears them.
