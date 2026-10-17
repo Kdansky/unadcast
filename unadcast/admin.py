@@ -532,7 +532,7 @@ document.getElementById("find").onclick = async () => {
     }
   } catch (e) { box.innerHTML = ""; say(e.message, true); }
 };
-document.getElementById("q").onkeydown = e => e.key === "Enter" && document.getElementById("find").click();
+document.getElementById("q").onkeydown = e => { if (e.key === "Enter") document.getElementById("find").click(); };
 // Stopped once the PC checks in after the press with nothing of unadcast left running.
 const stopped = t => s => s.on && s.pc.seen > t && !s.busy && !s.gpu.length && "stopped, GPU free";
 document.getElementById("stop").onclick = () => confirm("Stop processing and free the GPU? The running step is redone on the next pass.") &&
