@@ -50,6 +50,14 @@ def test_hides_unprocessed(ctx):
     assert list(items(ctx)[1]) == [ctx.pending("show")[0].title]
 
 
+def test_all_cut_episodes_leave_the_feed(ctx):
+    poll.poll(ctx, ctx.feed("show"))
+    ep2 = next(e for e in ctx.pending("show") if e.title == "ep2")
+    fake_output(ep2, removed=200.0, duration=0)
+    publish.publish(ctx, ctx.feed("show"))
+    assert sorted(items(ctx)[1]) == ["ep1", "ep3"]
+    assert not (ctx.public / "show" / f"{ep2.id}.mp3").exists()
+
 def test_mirrors_audio_into_public_dir(ctx):
     poll.poll(ctx, ctx.feed("show"))
     a, b = ctx.pending("show")[:2]

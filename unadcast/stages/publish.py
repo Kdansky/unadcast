@@ -50,9 +50,12 @@ def publish(ctx, feed):
             if ctx.cfg["publish"]["unprocessed"] == "hide":
                 channel.remove(item)
             continue
+        out = json.loads((d / "out.json").read_text())
+        if not out["duration"]:
+            channel.remove(item)
+            continue
         mirror(d / "out.mp3", audio / f"{d.name}.mp3")
         served.add(f"{d.name}.mp3")
-        out = json.loads((d / "out.json").read_text())
         enc.set("url", f"{base}/{slug}/{d.name}.mp3")
         enc.set("length", str((audio / f"{d.name}.mp3").stat().st_size))
         enc.set("type", "audio/mpeg")

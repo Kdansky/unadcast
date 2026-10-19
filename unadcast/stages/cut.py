@@ -44,6 +44,11 @@ def run(ep):
     cf = cfg["crossfade"]
     cuts = plan["cuts"] if mode == "cut" else []
     keep = plan["keep"] if cuts else [[0.0, plan["duration"]]]
+    if not keep:
+        # All of it is cut: a promo or trailer dropped into the feed. Publishing leaves it out.
+        ep.path("out.mp3").write_bytes(b"")
+        ep.save("out.json", {"mode": mode, "duration": 0, "removed": plan["duration"]})
+        return
     total = remap(plan["duration"], keep, cf)
     labelled = [(remap(s["start"], keep, cf), remap(s["end"], keep, cf), "Ad?") for s in plan["marks"]]
     if mode == "mark":

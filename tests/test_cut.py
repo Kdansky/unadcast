@@ -51,6 +51,14 @@ def test_cut_mode_removes_cuts(ep, prepared):
     assert out["mode"] == "cut" and out["removed"] == pytest.approx(55, abs=0.5)
 
 
+def test_all_cut_renders_nothing(ep, prepared):
+    prepared.feed("show")["mode"] = "cut"
+    d = ep.load("meta.json")["duration"]
+    ep.save("plan.json", {"duration": d, "keep": [], "cuts": [span(0, d, "cut")], "marks": [], "removed": d})
+    cut.STAGE.execute(ep)
+    assert ep.load("out.json") == {"mode": "cut", "duration": 0, "removed": d}
+    assert not cut.STAGE.stale(ep)
+
 def test_mark_mode_keeps_audio_and_adds_chapters(ep):
     write_plan(ep, [span(57.06, 82.06, "cut")], [span(112.06, 142.06, "mark")])
     cut.STAGE.execute(ep)
