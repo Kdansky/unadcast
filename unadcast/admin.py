@@ -21,7 +21,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 MODES = ("mark", "cut")
-DETECTORS = ("repeat", "voice", "loudness", "llm")
+DETECTORS = ("repeat", "voice", "loudness", "boilerplate", "llm")
 # How long the pending feed trusts its last look at a show's own feed: readers poll often, publishers mind.
 FRESH = 900
 
@@ -518,12 +518,13 @@ async function refresh() {
 }
 
 const STAGES = {download: "Downloading", prepare: "Preparing", detect_loudness: "Loudness check", detect_voice: "Voice check",
-  fingerprint: "Fingerprinting", detect_repeat: "Matching repeats", transcribe: "Transcribing", detect_llm: "Reading the transcript",
+  fingerprint: "Fingerprinting", detect_repeat: "Matching repeats", transcribe: "Transcribing", index_words: "Indexing words", detect_boilerplate: "Matching boilerplate", detect_llm: "Reading the transcript",
   fuse: "Deciding", cut: "Cutting"};
 const DETECTORS = [
   ["repeat", "Repeats", "Audio heard in other episodes, of any show: network ad blocks and promos. The strongest signal. CPU, cheap."],
   ["voice", "Voices", "Voices the episode barely uses, like an ad's announcer. Extends cuts across a whole ad break. CPU, about 45 s per hour of audio."],
   ["loudness", "Loudness", "Stretches mastered louder or quieter than the show. Weak alone, a useful second opinion. Free."],
+  ["boilerplate", "Boilerplate", "Words the show says every episode: credits, \"email us at\", \"please subscribe\", the greeting. Needs the transcript. CPU, cheap."],
   ["llm", "Transcript", "Whisper transcribes, a local language model reads it. The only one that catches ads the hosts read themselves. GPU, about 2 min per hour of audio."],
 ];
 async function detectors() {

@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS prints (episode TEXT PRIMARY KEY, feed TEXT, data BLO
 CREATE TABLE IF NOT EXISTS hashes (hash INTEGER, episode TEXT, pos INTEGER);
 CREATE INDEX IF NOT EXISTS hashes_hash ON hashes (hash);
 CREATE INDEX IF NOT EXISTS hashes_episode ON hashes (episode);
+CREATE TABLE IF NOT EXISTS grams (hash INTEGER, feed TEXT, episode TEXT);
+CREATE INDEX IF NOT EXISTS grams_hash ON grams (feed, hash);
+CREATE INDEX IF NOT EXISTS grams_episode ON grams (episode);
 """
 
 

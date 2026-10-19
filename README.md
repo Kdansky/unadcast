@@ -55,7 +55,7 @@ address at the end.
 - **Messages**, pinned to the bottom, are the answers to what you clicked, with the time. Each says what it is waiting
   for and, once that has happened, what came of it ("Pass requested → pass started 21:04", "cut mode → applied by the
   pass that ended 21:30"); those, and anything older than ten minutes, are greyed out as history. × clears them.
-- **Detectors**: switch the four ways of finding ads on or off for all shows (see below for what each does). Switching
+- **Detectors**: switch the five ways of finding ads on or off for all shows (see below for what each does). Switching
   the transcript off also frees the GPU. Saving starts a pass, which redoes only what the change affects.
 
 ### Switching Podcast Addict without losing played episodes
@@ -87,9 +87,11 @@ For each new episode, several detectors look for ads independently:
 - **loudness**: stretches mastered louder or quieter than the show.
 - **llm**: Whisper transcribes, and a local language model reads the transcript for sponsor reads, promo codes and
   promos, including ads the hosts read themselves.
+- **boilerplate**: whole sentences the show says every episode: credits, "email us at", "subscribe", the hotline. Read
+  from the transcript, so a fresh recording of the same words is found. A sentence only partly made of them stays.
 
-Where they agree, the ad is cut; where only one is unsure, it becomes an "Ad?" chapter. An intro or theme that every
-episode shares is recognised and kept. On six hand-checked episodes this cut all of the ad time, and lost under a minute
+Where they agree, the ad is cut; where only one is unsure, it becomes an "Ad?" chapter. A theme tune that every
+episode shares is recognised and kept; the show's spoken boilerplate is cut. On six hand-checked episodes this cut all of the ad time, and lost under a minute
 of actual show per episode on average (under two at worst), mostly closing credits next to an ad block.
 
 The processing machine does the heavy work only when asked or due; between passes it runs one tiny container. If
@@ -185,8 +187,8 @@ the next pass. The most useful:
 - `[publish] mode`: the default for shows that don't set their own (`mark`).
 - `[publish] unprocessed`: `original` keeps unprocessed episodes in the feed with the publisher's audio; `hide`
   leaves them out.
-- Detectors are switched on the admin page. `[detect.repeat]`, `[detect.voice]`, `[detect.loudness]`, `[detect.llm]`
-  `enabled = false` in `config.toml` does the same; the admin page's switches win when both are set.
+- Detectors are switched on the admin page. `[detect.repeat]`, `[detect.voice]`, `[detect.loudness]`, `[detect.boilerplate]`,
+  `[detect.llm]` `enabled = false` in `config.toml` does the same; the admin page's switches win when both are set.
 - `[llm]`: another Ollama model, or `backend = "openai"` with `base_url`, `model` and `api_key_env` for any
   OpenAI-compatible server.
 

@@ -68,10 +68,10 @@ unadcast/
   cli.py         unadcast run | loop | stage | status | report | spans | eval | find
   config.py      DEFAULTS for every setting; config.toml overrides; feed entry normalisation
   core.py        Ctx (config + db + paths), Episode (a work dir), Stage (run + staleness stamps)
-  db.py          SQLite schema: feeds, episodes, runs (failures), prints + hashes (fingerprint index)
+  db.py          SQLite schema: feeds, episodes, runs (failures), prints + hashes (fingerprint index), grams (word index)
   runner.py      one pass: feed list sync, poll, stages, prune, publish, status.json; the 30-minute loop
   stages/        poll download prepare detect_loudness detect_voice detect_repeat (+ fingerprint)
-                 transcribe detect_llm fuse cut publish; __init__.py holds the execution order
+                 transcribe detect_boilerplate (+ index_words) detect_llm fuse cut publish; __init__.py holds the order
   llm.py         Ollama and OpenAI-compatible chat over httpx; tolerant JSON parsing
   evaluate.py    plans against hand labels, second by second
   spans.py       boolean masks to time spans, span merging
@@ -185,7 +185,8 @@ Alternatives: `bin/unadcast run` by hand, or `docker compose --profile always up
 3. **Poll** every feed (conditional GET), and record its items. The newest `keep` episodes per show whose titles match
    none of its `exclude` phrases are pending, newest first.
 4. **Stages**, in the order of `stages.STAGES`, each across all pending episodes before the next: download, prepare,
-   detect_loudness, detect_voice, fingerprint, detect_repeat, transcribe, detect_llm, fuse, cut. Before each step,
+   detect_loudness, detect_voice, fingerprint, detect_repeat, transcribe, index_words, detect_boilerplate, detect_llm,
+   fuse, cut. Before each step,
    `status.json` gets `current`: stage, show, episode, step k of the stage's n, since when. A stage runs for an
    episode when its inputs exist and its stamp is stale. After a stage that ran, its `after` hook frees its model
    (Whisper; the LLM is told to unload).
@@ -252,6 +253,27 @@ or any other, is almost always an ad.
 A runner pass indexes all its episodes before matching any. Earlier episodes are not re-scored when later ones arrive
 (`unadcast stage detect_repeat --force` does that).
 
+### detect_boilerplate: words the show says every episode
+
+Credits, "email us at", "subscribe to The Verge", the hotline, "Welcome back to Behind the Bastards, a podcast about…".
+Read live, they sound different every time, so `detect_repeat` can't find them; the words barely change.
+
+- `index_words` hashes every run of `n` (6) words of `transcript.json`, lowercased and without punctuation, into
+  `grams(hash, feed, episode)`. Like `fingerprint`, a pass indexes its whole batch before matching, and rows outlive
+  the work dirs.
+- `detect_boilerplate` counts, per run, the other episodes of the **same show** that contain it; a word gets the most
+  any run covering it has.
+- **Whole sentences or nothing.** A sentence ends at `.` `?` `!` or a `pause`. It is boilerplate when every word recurs
+  in `min_episodes` (2) others; a mixed one stays. Formulas sit inside a show's own sentences: the Vergecast's "Hello
+  and welcome to the Vergecast, the flagship podcast of" opens a different joke every week, and cutting the formula
+  left the joke dangling. Consecutive boilerplate sentences of at least `min_words` (10) are one vote, kind
+  `boilerplate`. A share threshold like `theme_share` would miss credits: Better Offline's recur in 2 of 9 episodes,
+  the rest being monologues with other endings.
+- Misses: Whisper sometimes writes a stretch lowercase without punctuation or pauses, and the credits melt into one
+  mixed "sentence" with the show. Better Offline's 2026-10 outro is like that. Network promos are found again here;
+  they were cut already.
+- The query forces `gq CROSS JOIN grams`: left to itself SQLite scanned gq once per index row, 40 s an episode.
+
 ### detect_voice: voices the episode barely uses
 
 Hosts and guests talk for many minutes; the announcer of a spot for thirty seconds, once.
@@ -304,10 +326,13 @@ the first JSON object past any chatter). `llm.py` speaks Ollama's `/api/chat` an
 ### fuse
 
 1. A timeline at `res` (0.25 s). Per detector, `s_d(t)` is the highest `weight × kinds[kind] × confidence` of its spans
-   covering `t`. Combined with noisy-OR: `p(t) = 1 − Π(1 − s_d(t))`. `intro`/`outro` votes set `p(t) = 0`.
+   covering `t`. Combined with noisy-OR: `p(t) = 1 − Π(1 − s_d(t))`. `intro`/`outro` votes set `p(t) = 0`, except
+   under a `boilerplate` vote: credits read over the outro music go too.
 2. **Cut** where `p ≥ cut_threshold`, the run is at most `max_length`, and it is corroborated: a `strong` detector
    (`repeat`) voted, or two detectors of any kind did. With the defaults loudness alone reaches 0.64, a voice hint 0.48,
-   an LLM vote up to 1.0: alone, none of them cuts.
+   an LLM vote up to 1.0: alone, none of them cuts. `exact` detectors (`boilerplate`) are left out of this and cut
+   wherever they score `cut_threshold` on their own, however short, and never joined across a gap: they vote whole
+   sentences, and the gap between two of them is a sentence they kept.
 3. **Extend**: a span from an `extend` detector (`voice`) that touches a cut joins it, because ad breaks are
    contiguous. That is how a Vergecast break gets cut whole: a recurring house promo (repeat) opens it, unique announcer
    spots (voice) fill it.
@@ -430,12 +455,13 @@ resolve against the config file's directory.
 | `detect.repeat` | `weight 1.0, min_run 8, min_hits 4, max_bits 10, base 0.2, edge 90, theme_share 0.6, bumper 25` | |
 | `detect.voice` | `weight 0.6, tau 0.4, cap 240, cap_share 0.1, min_length 15, merge_gap 5, voiced_lufs -45` | |
 | `detect.loudness` | `weight 0.8, threshold_lu 3, min_length 10, max_length 180` | |
+| `detect.boilerplate` | `weight 1.0, n 6, min_words 10, min_episodes 2, base 0.2, pause 1` | needs `transcribe` |
 | `detect.llm` | `weight 1.0, chunk_minutes 8, overlap_minutes 1, verify true` | |
 | `detect.<name>.enabled` | `true` | switch a detector off; the admin page's switches override it |
 | `transcribe` | `enabled, model large-v3-turbo, device cuda, compute_type int8_float16, language en` | off also turns `detect_llm` off |
 | `llm` | `backend ollama, base_url http://ollama:11434, model qwen3.5:9b-q4_K_M, api_key_env "", temperature 0, seed 1, num_ctx 8192, keep_alive 2m, timeout 600` | `backend = "openai"` for any OpenAI-compatible server |
-| `fuse` | `res 0.25, cut_threshold 0.75, mark_threshold 0.45, merge_gap 4, min_length 8, max_length 600, snap_window 3, strong ["repeat"], extend ["voice"]` | |
-| `fuse.kinds` | `ad 1, promo 1, hint 0.8, intro 0, outro 0` | weight per vote kind |
+| `fuse` | `res 0.25, cut_threshold 0.75, mark_threshold 0.45, merge_gap 4, min_length 8, max_length 600, snap_window 3, strong ["repeat", "boilerplate"], extend ["voice"], exact ["boilerplate"]` | |
+| `fuse.kinds` | `ad 1, promo 1, hint 0.8, boilerplate 1, intro 0, outro 0` | weight per vote kind |
 | `publish.mode` | `mark` | default for shows that don't set one |
 | `publish.unprocessed` | `original` | or `hide` |
 | `publish.crossfade` / `quality` | 0.08 s / 3 (LAME VBR) | |

@@ -32,6 +32,9 @@ def plan(votes, duration, silences, loudness, cfg):
             better = v > score[d][i:j]
             score[d][i:j][better] = v
             kind[d][i:j][better] = s["kind"]
+    # Credits read over the outro music are boilerplate all the same: the show's own recurring words beat its theme.
+    if "boilerplate" in score:
+        veto &= score["boilerplate"] == 0
     p = 1 - np.prod([1 - v for v in score.values()], axis=0) if score else np.zeros(n)
     p[veto] = 0
 
@@ -51,13 +54,18 @@ def plan(votes, duration, silences, loudness, cfg):
 
     # Cut only where p itself is high. A weak fringe next to a strong core, like a loudness hint running on into a loud
     # intro, is marked rather than dragged along with the cut.
+    exact = [d for d in score if d in f["exact"]]
+    loose = 1 - np.prod([1 - v for d, v in score.items() if d not in exact], axis=0) if len(exact) < len(score) else np.zeros(n)
+    loose[veto] = 0
     cut = np.zeros(n, bool)
-    for a, b in close(runs(p >= f["cut_threshold"], res), f["merge_gap"]):
+    for a, b in close(runs(loose >= f["cut_threshold"], res), f["merge_gap"]):
         i, j = int(a / res), math.ceil(b / res)
-        voters = [d for d, v in score.items() if v[i:j].max() > 0]
+        voters = [d for d, v in score.items() if d not in exact and v[i:j].max() > 0]
         corroborated = len(voters) >= 2 or any(d in f["strong"] for d in voters)
         if f["min_length"] <= b - a <= f["max_length"] and corroborated:
             cut[i:j] = True
+    for d in exact:
+        cut |= (score[d] >= f["cut_threshold"]) & ~veto
     # An ad break is contiguous: a span from an `extend` detector that touches a cut belongs to the same break.
     ext = np.zeros(n, bool)
     for d in f["extend"]:

@@ -102,10 +102,10 @@ def test_pass_output(client):
 
 
 def test_detector_settings(client, paths):
-    assert client.get("/admin/api/settings").json() == {"detect": {"repeat": True, "voice": True, "loudness": True, "llm": True}}
+    assert client.get("/admin/api/settings").json() == {"detect": {"repeat": True, "voice": True, "loudness": True, "boilerplate": True, "llm": True}}
     before = client.get("/admin/api/run").json()["requested"]
     r = client.put("/admin/api/settings", json={"detect": {"llm": False, "loudness": False}})
-    assert r.json()["detect"] == {"repeat": True, "voice": True, "loudness": False, "llm": False}
+    assert r.json()["detect"] == {"repeat": True, "voice": True, "loudness": False, "boilerplate": True, "llm": False}
     # Saving asks for a pass, so the change shows up without another click.
     assert client.get("/admin/api/run").json()["requested"] > before
     assert TestClient(admin.app(*paths)).get("/admin/api/settings").json()["detect"]["llm"] is False

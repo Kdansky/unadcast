@@ -24,6 +24,9 @@ DEFAULTS = {
         "voice": {"enabled": True, "weight": 0.6, "tau": 0.4, "cap": 240.0, "cap_share": 0.1, "min_length": 15.0, "merge_gap": 5.0, "voiced_lufs": -45.0},
         "llm": {"enabled": True, "weight": 1.0, "chunk_minutes": 8.0, "overlap_minutes": 1.0, "verify": True},
         "repeat": {"enabled": True, "weight": 1.0, "min_run": 8.0, "min_hits": 4, "max_bits": 10, "base": 0.2, "edge": 90.0, "theme_share": 0.6, "bumper": 25.0},
+        # whole sentences whose every run of `n` words was said in `min_episodes` other episodes of the show; a sentence
+        # ends at . ? ! or a `pause`. Runs of them shorter than `min_words` are left alone.
+        "boilerplate": {"enabled": True, "weight": 1.0, "n": 6, "min_words": 10, "min_episodes": 2, "base": 0.2, "pause": 1.0},
     },
     "transcribe": {"enabled": True, "model": "large-v3-turbo", "device": "cuda", "compute_type": "int8_float16", "language": "en"},
     "llm": {
@@ -49,10 +52,13 @@ DEFAULTS = {
         "snap_window": 3.0,
         # a cut needs a vote from one of these, or from two detectors of any kind. Not llm: alone, even after its
         # verification pass, it cuts too much show (ARCHITECTURE.md, Evaluation).
-        "strong": ["repeat"],
+        "strong": ["repeat", "boilerplate"],
         # spans from these that touch a cut join it: ad breaks are contiguous
         "extend": ["voice"],
-        "kinds": {"ad": 1.0, "promo": 1.0, "hint": 0.8, "intro": 0.0, "outro": 0.0},
+        # cut exactly where they say, however short, and never joined across a gap: they mark whole sentences, and what
+        # lies between is a sentence they chose to keep
+        "exact": ["boilerplate"],
+        "kinds": {"ad": 1.0, "promo": 1.0, "hint": 0.8, "boilerplate": 1.0, "intro": 0.0, "outro": 0.0},
     },
     "publish": {"mode": "mark", "unprocessed": "original", "crossfade": 0.08, "quality": 3},
 }

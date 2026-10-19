@@ -119,3 +119,19 @@ def test_llm_alone_marks_with_a_second_detector_cuts(cfg):
     assert alone["cuts"] == [] and [(m["start"], m["end"]) for m in alone["marks"]] == [(100, 160)]
     both = plan(cfg, {"llm": [seg(100, 160, conf=0.95)], "voice": [seg(102, 158, conf=0.9, kind="hint")]})
     assert [(c["start"], c["end"]) for c in both["cuts"]] == [(100, 160)]
+
+
+def test_boilerplate_beats_the_outro(cfg):
+    # Credits read over the theme: repeat calls it the outro, the words say boilerplate.
+    p = plan(cfg, {"repeat": [seg(560, 600, kind="outro")], "boilerplate": [seg(570, 590, kind="boilerplate")]})
+    assert [(c["start"], c["end"], c["kind"]) for c in p["cuts"]] == [(570, 590, "boilerplate")]
+
+
+def test_short_boilerplate_is_cut(cfg):
+    p = plan(cfg, {"boilerplate": [seg(300, 303, kind="boilerplate")]})
+    assert [(c["start"], c["end"]) for c in p["cuts"]] == [(300, 303)]
+
+
+def test_boilerplate_is_never_joined_across_a_kept_sentence(cfg):
+    p = plan(cfg, {"boilerplate": [seg(300, 303, kind="boilerplate"), seg(305, 309, kind="boilerplate")]})
+    assert [(c["start"], c["end"]) for c in p["cuts"]] == [(300, 303), (305, 309)]
