@@ -314,6 +314,7 @@ def app(feeds_path, status):
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>unadcast</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232f6f4f'/><path d='M7 12v8M11 8v16M21 9v14M25 12v8' stroke='%23fff' stroke-width='3' stroke-linecap='round'/></svg>">
 <style>
 :root { --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc; --card: #fff; --accent: #2f6f4f; --bad: #a33; }
 @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe6; --muted: #9a9a93; --line: #33332f; --card: #1f1f1d; --accent: #6fbf94; --bad: #e07a7a; } }
