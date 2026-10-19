@@ -3,6 +3,7 @@ import json
 import pytest
 
 from unadcast import evaluate, runner
+from unadcast.core import Episode
 
 from tests.conftest import ads
 
@@ -26,7 +27,8 @@ def test_evaluate_labelled_episodes(make_ctx, feed_url, tmp_path):
     labels.mkdir(parents=True)
     by = {e.title: e for e in ctx.pending("show")}
     for title in ("ep1", "ep2"):
-        (labels / f"{by[title].id}.json").write_text(json.dumps({"title": title, "ads": [list(a) for a in ads(title)]}))
+        label = {"id": by[title].id, "title": title, "ads": [list(a) for a in ads(title)]}
+        (labels / f"2026-01-0{title[-1]} {title}.json").write_text(json.dumps(label))
 
     rows = evaluate.evaluate(ctx)
     assert [r["title"] for r in rows] == ["ep1", "ep2"]
@@ -37,6 +39,11 @@ def test_evaluate_labelled_episodes(make_ctx, feed_url, tmp_path):
     alone = evaluate.evaluate(ctx, only={"loudness"})
     assert all(r["score"]["cut_ad"] == 0 and r["score"]["mark_ad"] > 0 for r in alone)
 
+
+def test_label_names_are_safe(ctx):
+    ep = Episode("abc", "show", "g", ' "Cycular" Financing w/ $413bn: Ünïcode? <ok> (Part 2)... ', 1759363200.0, "u", 0, ctx=ctx)
+    path = evaluate.label_path(ctx, ep)
+    assert path.relative_to(ctx.cfg["paths"]["labels"]).as_posix() == "show/2025-10-02 Cycular Financing w 413bn Ünïcode ok (Part 2).json"
 
 def test_report_has_totals():
     rows = [{"feed": "f", "title": "a", "score": dict(ad=100, cut_ad=80, mark_ad=10, missed=10, cut_show=2, mark_show=5)}] * 2

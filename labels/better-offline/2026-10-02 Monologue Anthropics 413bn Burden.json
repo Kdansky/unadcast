@@ -1,17 +1,14 @@
 {
- "title": "The hot new thing in headphones",
+ "id": "d21c13c25892",
+ "title": "Monologue: Anthropic's $413bn Burden",
  "ads": [
   [
    0,
-   109
+   179
   ],
   [
-   234,
-   345
-  ],
-  [
-   1400,
-   1528
+   570,
+   null
   ]
  ],
  "how": "Whisper transcript read by hand; edges at speech boundaries"

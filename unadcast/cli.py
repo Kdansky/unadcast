@@ -1,4 +1,5 @@
 import argparse
+import json
 import re
 import sys
 import time
@@ -81,6 +82,15 @@ def cmd_cuts(ctx, a):
         print(f"  before: ...{say(a - 12, a)}\n  starts: {say(a, a + 15)}\n  ends:   ...{say(b - 15, b)}\n  after:  {say(b, b + 12)}...")
 
 
+def cmd_label(ctx, a):
+    """Start a label file for an episode under its proper name, or point at the one already there."""
+    ep = find_episode(ctx, a.episode)
+    path = evaluate.label_path(ctx, ep)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"id": ep.id, "title": ep.title, "ads": []}, indent=1))
+    print(path)
+
 def cmd_eval(ctx, a):
     print(evaluate.report(evaluate.evaluate(ctx, set(a.only) if a.only else None)))
 
@@ -117,7 +127,9 @@ def main(argv=None):
     s.add_argument("episode")
     s = sub.add_parser("cuts", help="cuts and marks with the words at their edges")
     s.add_argument("episode")
-    s = sub.add_parser("eval", help="score plans against labels/<feed>/<episode>.json, with the current config")
+    s = sub.add_parser("label", help="start a label file for an episode, or print where it is")
+    s.add_argument("episode")
+    s = sub.add_parser("eval", help="score plans against the files in labels/, with the current config")
     s.add_argument("--only", action="append", help="fuse only this detector's votes (repeatable)")
     s = sub.add_parser("find", help="look up a podcast's feed url")
     s.add_argument("term")

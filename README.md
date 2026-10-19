@@ -195,7 +195,7 @@ the next pass. The most useful:
 - **By ear**: shows in mark mode get chapters; listen around them. `bin/play` plays a span from the command line.
 - **Why something was cut**: `bin/unadcast report <episode>` lists every span with each detector's score and evidence
   ("also in Episode 212", "a voice heard for 31 s in the whole episode", the transcript lines the LLM objected to).
-- **Measured**: `labels/<show>/<episode>.json` holds hand-marked ad times. `bin/unadcast eval` scores the current
+- **Measured**: `labels/<show>/<release date> <title>.json` holds hand-marked ad times, and the episode's `id`; `bin/unadcast label <episode>` starts one. `bin/unadcast eval` scores the current
   settings against them (ad cut, marked, missed; show cut, marked), in seconds, without reprocessing anything.
   `--only voice` scores one detector alone. Label a few episodes of a new show before trusting cut mode with it.
 

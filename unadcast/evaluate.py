@@ -3,6 +3,8 @@
 import copy
 import json
 import math
+import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +38,12 @@ def score(plan, ads):
     }
 
 
+def label_path(ctx, ep):
+    """labels/<feed>/<release date> <title>.json, so a feed's labels sort by date. The title keeps letters, digits and a
+    few safe marks: the name gets typed into shells and copied onto SMB shares, and both choke on the rest."""
+    title = " ".join(re.sub(r"[^\w .,()-]", "", ep.title).split()).strip(". ")[:100]
+    return Path(ctx.cfg["paths"]["labels"]) / ep.feed / f"{time.strftime('%Y-%m-%d', time.gmtime(ep.published))} {title}.json"
+
 def evaluate(ctx, only=None):
     """Score every labelled episode that is still in a work dir. `only` restricts fusion to those detectors."""
     cfg = copy.deepcopy(ctx.cfg)
@@ -44,13 +52,13 @@ def evaluate(ctx, only=None):
             c["enabled"] = c["enabled"] and name in only
     rows = []
     for path in sorted(Path(cfg["paths"]["labels"]).glob("*/*.json")):
+        label = json.loads(path.read_text())
         try:
-            ep = ctx.episode(path.stem)
+            ep = ctx.episode(label["id"])
         except KeyError:
             continue
         if not ep.path("audio.wav").exists():
             continue
-        label = json.loads(path.read_text())
         rows.append({"feed": ep.feed, "published": ep.published, "title": ep.title, "score": score(fuse.replan(ep, cfg), label["ads"])})
     return sorted(rows, key=lambda r: (r["feed"], r["published"]))
 

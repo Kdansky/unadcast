@@ -448,11 +448,12 @@ compose: `COMPOSE_PROFILES`, `COMPOSE_FILE`, `NAS_IP` (the CIFS client wants an 
 
 ## Evaluation
 
-`labels/<feed>/<episode-id>.json` holds hand-marked ad spans, made by transcribing an episode and reading the text
-around detected spans and around ad cues:
+`labels/<feed>/<release date> <title>.json` holds hand-marked ad spans, made by transcribing an episode and reading
+the text around detected spans and around ad cues. The name is for sorting and browsing; `eval` finds the episode by
+`id`. `unadcast label <episode>` starts one, its title stripped to letters, digits and `.,()-`:
 
 ```json
-{"title": "Part Two: Heinrich Schliemann", "ads": [[61, 237], [1318, 1659], [2541, 2872], [3496, null]]}
+{"id": "ca84e6182ce5", "title": "Part Two: Heinrich Schliemann", "ads": [[61, 237], [1318, 1659], [2541, 2872], [3496, null]]}
 ```
 
 `null` runs to the end. Network tags ("This is an iHeart Podcast") belong to the ad block; the show's own intro and
