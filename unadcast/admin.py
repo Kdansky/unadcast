@@ -524,7 +524,7 @@ const DETECTORS = [
   ["repeat", "Repeats", "Audio heard in other episodes, of any show: network ad blocks and promos. The strongest signal. CPU, cheap."],
   ["voice", "Voices", "Voices the episode barely uses, like an ad's announcer. Extends cuts across a whole ad break. CPU, about 45 s per hour of audio."],
   ["loudness", "Loudness", "Stretches mastered louder or quieter than the show. Weak alone, a useful second opinion. Free."],
-  ["boilerplate", "Boilerplate", "Words the show says every episode: credits, \"email us at\", \"please subscribe\", the greeting. Needs the transcript. CPU, cheap."],
+  ["boilerplate", "Boilerplate", "Words the show says every episode: credits, “email us at”, “please subscribe”, the greeting. Needs the transcript. CPU, cheap."],
   ["llm", "Transcript", "Whisper transcribes, a local language model reads it. The only one that catches ads the hosts read themselves. GPU, about 2 min per hour of audio."],
 ];
 async function detectors() {

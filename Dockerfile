@@ -15,8 +15,8 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 WORKDIR /work
 
 FROM app AS dev
-# bin/on-demand's tests: it uses busybox-style wget, as in the watcher image.
-RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+# bin/on-demand's tests: it uses busybox-style wget, as in the watcher image. node checks the admin page's script parses.
+RUN apt-get update && apt-get install -y --no-install-recommends wget nodejs && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY bin ./bin
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
